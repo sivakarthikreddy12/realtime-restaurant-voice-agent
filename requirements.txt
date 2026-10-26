@@ -1,0 +1,16 @@
+# Verified with CPython 3.14.5 on macOS (Apple Silicon).
+# speech-to-speech 1.1.0 supports Python 3.11-3.14 and provides the
+# `speech-to-speech local` realtime microphone/speaker pipeline.
+speech-to-speech==1.1.0
+
+# A trusted CA bundle used only when the interpreter's platform store is empty.
+# TLS certificate verification is always kept enabled.
+certifi>=2024.8.30
+
+# Python 3.13+ removed the stdlib audioop module. librosa/audioread pull this
+# in transitively, but pinning it documents the Python 3.14 compatibility fix.
+audioop-lts>=0.2.2; python_version >= "3.13"
+
+# Local web UI and Realtime WebSocket bridge.
+fastapi>=0.115.0
+uvicorn>=0.30.0
