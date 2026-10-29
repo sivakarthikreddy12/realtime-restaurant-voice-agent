@@ -126,6 +126,7 @@ class RealtimeContractTests(unittest.IsolatedAsyncioTestCase):
             build_session_update,
             load_realtime_tool_module,
         )
+        from ui_server import build_browser_session_update
 
         tools, executor, create_response = load_realtime_tool_module("order_tools")
         config = RealtimeAudioClientConfig(
@@ -144,6 +145,9 @@ class RealtimeContractTests(unittest.IsolatedAsyncioTestCase):
             ["show_menu", "add_to_cart", "remove_from_cart", "get_cart", "create_mock_order"],
         )
         self.assertEqual(session["audio"]["input"]["turn_detection"]["type"], "server_vad")
+        browser_detection = build_browser_session_update(config)["session"]["audio"]["input"]["turn_detection"]
+        self.assertTrue(browser_detection["create_response"])
+        self.assertEqual(browser_detection["silence_duration_ms"], 700)
         # At the pipeline's native 16 kHz the client omits an explicit format.
         self.assertNotIn("format", session["audio"]["input"])
         self.assertFalse(session["audio"]["input"].get("format"))

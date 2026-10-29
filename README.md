@@ -127,11 +127,19 @@ Open the URL printed in the terminal, normally:
 http://127.0.0.1:8000
 ```
 
+While testing voice turns, follow `latency.log` from any terminal with
+`tail -f latency.log`. The server also prints these `[LATENCY]` lines to its
+terminal. They show speech-end detection, transcription completion, response
+start, first generated text/audio, response completion, and tool execution time
+without logging the recognized words.
+
 Controls:
 
-- **Talk** toggles browser microphone streaming. Allow microphone access when
-  the browser asks. Tap **Stop** when finished; the UI sends trailing silence so
-  the server can finish the turn.
+- Tap **Talk** once to start browser microphone streaming and allow microphone
+  access when the browser asks. Speak naturally; server-side voice activity
+  detection responds after a 700 ms pause, so you do not need to tap Stop after
+  each turn. Speak over the assistant to interrupt it and take the turn.
+  **Stop listening** disables the microphone when you are finished.
 - The text box works without a microphone, which is useful for testing.
 - The right panel shows the cart, subtotal, and the last tool result.
 - **Create mock order** appears after items are in the cart. It asks for

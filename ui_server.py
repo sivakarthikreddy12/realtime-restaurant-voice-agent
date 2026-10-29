@@ -49,6 +49,7 @@ from speech_to_speech.api.openai_realtime.audio_client import (
 )
 
 UI_INDEX = PROJECT_ROOT / "ui" / "index.html"
+LATENCY_LOG = PROJECT_ROOT / "latency.log"
 DEFAULT_UI_PORT = 8000
 DEFAULT_S2S_PORT = 8765
 SILENCE_SECONDS = 1.2
@@ -61,6 +62,13 @@ def port_open(host: str, port: int, timeout: float = 0.25) -> bool:
             return True
     except OSError:
         return False
+
+
+def build_browser_session_update(config: RealtimeAudioClientConfig) -> dict[str, Any]:
+    session_update = build_session_update(config)
+    turn_detection = session_update["session"]["audio"]["input"]["turn_detection"]
+    turn_detection.update({"create_response": True, "silence_duration_ms": 700})
+    return session_update
 
 
 async def wait_for_port(host: str, port: int, process: subprocess.Popen[Any] | None, timeout: float) -> None:
@@ -146,6 +154,33 @@ class BrowserSession:
         self.browser = browser
         self.options = options
         self.pending_calls: list[dict[str, Any]] = []
+        self.latency_turn = 0
+        self.speech_started_at: float | None = None
+        self.speech_ended_at: float | None = None
+        self.response_started_at: float | None = None
+        self.response_cycle = 0
+        self.first_text_logged = False
+        self.first_audio_logged = False
+
+    def log_latency(self, stage: str, **measurements: float | int | str) -> None:
+        details = " ".join(
+            f"{name}={value:.0f}ms"
+            if isinstance(value, (int, float))
+            and ("duration" in name or name.startswith("after_") or name.endswith("_pause"))
+            else f"{name}={value}"
+            for name, value in measurements.items()
+        )
+        line = (
+            f"[{time.strftime('%H:%M:%S')}] [LATENCY] turn={self.latency_turn} "
+            f"{stage}{' ' + details if details else ''}"
+        )
+        print(line, flush=True)
+        with LATENCY_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(line + "\n")
+
+    @staticmethod
+    def elapsed_ms(started_at: float, ended_at: float | None = None) -> float:
+        return ((ended_at if ended_at is not None else time.perf_counter()) - started_at) * 1000
 
     async def send(self, payload: dict[str, Any]) -> None:
         await self.browser.send_json(payload)
@@ -168,7 +203,7 @@ class BrowserSession:
         )
         try:
             async with client.realtime.connect(model="local") as conn:
-                await conn.send(build_session_update(config))
+                await conn.send(build_browser_session_update(config))
                 while True:
                     event = await asyncio.wait_for(conn.recv(), timeout=30)
                     if event.type == "session.updated":
@@ -268,20 +303,51 @@ class BrowserSession:
 
             if kind == "conversation.item.input_audio_transcription.completed":
                 text = getattr(event, "transcript", "") or ""
+                if self.speech_ended_at is not None:
+                    self.log_latency(
+                        "transcription_complete",
+                        after_speech_end=self.elapsed_ms(self.speech_ended_at),
+                    )
                 if text:
                     await self.send({"type": "user_transcript", "text": text})
             elif kind in {"response.output_audio_transcript.delta", "response.output_text.delta"}:
+                if self.response_started_at is not None and not self.first_text_logged:
+                    self.first_text_logged = True
+                    self.log_latency(
+                        "first_text",
+                        after_response_start=self.elapsed_ms(self.response_started_at),
+                    )
                 await self.send({"type": "assistant_delta", "text": event.delta})
             elif kind == "response.output_audio_transcript.done":
                 text = getattr(event, "transcript", "") or ""
                 if text:
                     await self.send({"type": "assistant_done", "text": text})
             elif kind == "response.output_audio.delta":
+                if self.response_started_at is not None and not self.first_audio_logged:
+                    self.first_audio_logged = True
+                    self.log_latency(
+                        "first_audio",
+                        after_response_start=self.elapsed_ms(self.response_started_at),
+                        after_speech_end=self.elapsed_ms(self.speech_ended_at)
+                        if self.speech_ended_at is not None
+                        else "n/a",
+                    )
                 await self.send({"type": "audio", "audio": event.delta})
             elif kind == "response.output_audio.done":
                 await self.send({"type": "audio_done"})
             elif kind == "response.created":
-                await self.send({"type": "thinking"})
+                self.response_cycle += 1
+                self.response_started_at = time.perf_counter()
+                self.first_text_logged = False
+                self.first_audio_logged = False
+                self.log_latency(
+                    "response_started",
+                    cycle=self.response_cycle,
+                    after_speech_end=self.elapsed_ms(self.speech_ended_at)
+                    if self.speech_ended_at is not None
+                    else "n/a",
+                )
+                await self.send({"type": "response_started"})
             elif kind == "response.function_call_arguments.done":
                 try:
                     arguments = json.loads(event.arguments or "{}")
@@ -302,12 +368,26 @@ class BrowserSession:
                 )
             elif kind == "response.done":
                 status = getattr(event.response, "status", "completed")
+                if self.response_started_at is not None:
+                    self.log_latency(
+                        "response_complete",
+                        cycle=self.response_cycle,
+                        duration=self.elapsed_ms(self.response_started_at),
+                        status=status,
+                    )
                 if self.pending_calls:
                     for call in self.pending_calls:
+                        tool_started_at = time.perf_counter()
                         try:
                             result = await order_tools.execute_tool(call["name"], call["arguments"])
                         except Exception as exc:
                             result = {"error": f"{type(exc).__name__}: {exc}"}
+                        finally:
+                            self.log_latency(
+                                "tool_complete",
+                                name=call["name"],
+                                duration=self.elapsed_ms(tool_started_at),
+                            )
                         await conn.send(
                             {
                                 "type": "conversation.item.create",
@@ -330,8 +410,21 @@ class BrowserSession:
                 else:
                     await self.send({"type": "response_done", "status": status})
             elif kind == "input_audio_buffer.speech_started":
+                self.latency_turn += 1
+                self.speech_started_at = time.perf_counter()
+                self.speech_ended_at = None
+                self.response_cycle = 0
+                self.log_latency("speech_started")
                 await self.send({"type": "listening"})
             elif kind == "input_audio_buffer.speech_stopped":
+                self.speech_ended_at = time.perf_counter()
+                self.log_latency(
+                    "speech_end_detected",
+                    speech_duration=self.elapsed_ms(self.speech_started_at, self.speech_ended_at)
+                    if self.speech_started_at is not None
+                    else "n/a",
+                    vad_pause=700,
+                )
                 await self.send({"type": "thinking"})
             elif kind == "error":
                 error = getattr(event, "error", None)
