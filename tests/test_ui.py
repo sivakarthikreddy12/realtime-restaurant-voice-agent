@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import socket
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -36,6 +40,18 @@ class WebUILauncherTests(unittest.TestCase):
             free_port = sock.getsockname()[1]
         self.assertFalse(ui_server.port_open("127.0.0.1", free_port))
 
+    def test_latency_logs_include_turn_stage_and_measurements(self) -> None:
+        session = ui_server.BrowserSession(browser=None, options=None)
+        session.latency_turn = 3
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "latency.log"
+            with patch.object(ui_server, "LATENCY_LOG", log_path), redirect_stdout(output):
+                session.log_latency("first_audio", cycle=1, after_response_start=123.4)
+            expected = "[LATENCY] turn=3 first_audio cycle=1 after_response_start=123ms"
+            self.assertIn(expected, output.getvalue())
+            self.assertIn(expected, log_path.read_text(encoding="utf-8"))
+
     def test_static_page_has_required_controls(self) -> None:
         self.assertTrue(ui_server.UI_INDEX.exists())
         html = ui_server.UI_INDEX.read_text(encoding="utf-8")
@@ -50,11 +66,14 @@ class WebUILauncherTests(unittest.TestCase):
             'id="mockOrderBtn"',
             "navigator.mediaDevices.getUserMedia",
             "AudioWorkletNode",
+            "function stopPlayback()",
+            'case "response_started":',
             "type: \"audio\"",
             "type: \"text\"",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, html)
+        self.assertNotIn("assistantSpeaking()) return;", html)
 
     def test_routes_are_registered(self) -> None:
         paths = {getattr(route, "path", None) for route in ui_server.app.routes}

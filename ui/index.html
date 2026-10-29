@@ -234,7 +234,7 @@
           <input id="textInput" type="text" placeholder="Type an order or question..." autocomplete="off" disabled>
           <button id="sendBtn" class="send" type="button" disabled>Send</button>
         </div>
-        <div class="hint">Speak or type. Try “What’s on the menu?” or “Two cheeseburgers and a Coke.”</div>
+        <div class="hint">Tap Talk once, then speak naturally. The assistant responds when you pause; tap Stop listening to turn off the microphone.</div>
       </section>
 
       <aside class="side">
@@ -266,6 +266,8 @@
       mic: null,
       playCtx: null,
       nextPlayTime: 0,
+      audioSources: new Set(),
+      responseInterrupted: false,
       cartItems: [],
     };
 
@@ -494,7 +496,7 @@
     }
 
     function playAudio(base64) {
-      if (!base64) return;
+      if (!base64 || state.responseInterrupted) return;
       const ctx = ensurePlaybackContext();
       const bytes = base64ToBytes(base64);
       const count = Math.floor(bytes.length / 2);
@@ -506,9 +508,24 @@
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
+      state.audioSources.add(source);
+      source.onended = () => state.audioSources.delete(source);
       const start = Math.max(ctx.currentTime + 0.03, state.nextPlayTime);
       source.start(start);
       state.nextPlayTime = start + buffer.duration;
+    }
+
+    function stopPlayback() {
+      const ctx = state.playCtx;
+      for (const source of state.audioSources) {
+        try {
+          source.stop();
+        } catch {
+          // A source may have ended between receiving speech and stopping it.
+        }
+      }
+      state.audioSources.clear();
+      state.nextPlayTime = ctx ? ctx.currentTime : 0;
     }
 
     function assistantSpeaking() {
@@ -524,7 +541,9 @@
       }
       const delay = Math.max(0, (state.nextPlayTime - ctx.currentTime) * 1000 + 180);
       window.setTimeout(() => {
-        if (!assistantSpeaking()) setStatus("Ready", "ready");
+        if (!assistantSpeaking()) {
+          setStatus(state.micOn ? "Listening..." : "Ready", state.micOn ? "listening" : "ready");
+        }
       }, delay);
     }
 
@@ -595,7 +614,7 @@
         sink.connect(ctx.destination);
 
         node.port.onmessage = (event) => {
-          if (!state.micOn || assistantSpeaking()) return;
+          if (!state.micOn) return;
           const pcm = floatToPcm16(event.data, ctx.sampleRate);
           if (pcm.length) {
             send({ type: "audio", audio: bytesToBase64(new Uint8Array(pcm.buffer)) });
@@ -605,7 +624,7 @@
         state.mic = { stream, source, node, sink, ctx };
         state.micOn = true;
         micBtn.classList.add("active");
-        micLabel.textContent = "Stop";
+        micLabel.textContent = "Stop listening";
         setStatus("Listening...", "listening");
       } catch (error) {
         addSystem(`Microphone error: ${error.message || error}`);
@@ -654,13 +673,19 @@
             state.ready = true;
             setControlsEnabled(true);
             setStatus("Ready", "ready");
-            addSystem("Connected. Ask about the menu or tap Talk.");
+            addSystem("Connected. Tap Talk once to start hands-free listening.");
             break;
           case "listening":
+            state.responseInterrupted = true;
+            stopPlayback();
             setStatus("Listening...", "listening");
             break;
           case "thinking":
             resetAssistantBubble();
+            setStatus("Thinking...", "thinking");
+            break;
+          case "response_started":
+            state.responseInterrupted = false;
             setStatus("Thinking...", "thinking");
             break;
           case "user_transcript":
