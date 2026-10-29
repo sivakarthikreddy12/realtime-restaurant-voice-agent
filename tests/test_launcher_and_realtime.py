@@ -77,7 +77,7 @@ class RealtimeContractTests(unittest.IsolatedAsyncioTestCase):
         from speech_to_speech.api.openai_realtime.audio_client import load_realtime_tool_module
 
         tools, executor, create_response = load_realtime_tool_module("order_tools")
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 8)
         self.assertIs(create_response, True)
         result = await executor("add_to_cart", {"item_name": "Coke", "quantity": 2})
         payload = json.loads(json.dumps(result))
@@ -141,7 +141,9 @@ class RealtimeContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["tool_choice"], "auto")
         self.assertEqual(
             [tool["name"] for tool in session["tools"]],
-            ["show_menu", "add_to_cart", "remove_from_cart", "get_cart", "create_mock_order"],
+            ["show_menu", "add_to_cart", "remove_from_cart", "get_cart", "create_mock_order",
+             "remove_item_from_cart","set_item_quantity",
+        "replace_cart_item",],
         )
         self.assertEqual(session["audio"]["input"]["turn_detection"]["type"], "server_vad")
         # At the pipeline's native 16 kHz the client omits an explicit format.

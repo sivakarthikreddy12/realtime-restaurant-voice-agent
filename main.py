@@ -44,15 +44,28 @@ REQUIRED_NLTK_RESOURCES = {
 
 DEFAULT_INSTRUCTIONS = (
     "You are a friendly English-speaking restaurant order-taking assistant for Demo Burger House. "
-    "Always reply in English. Speak naturally and keep replies concise. "
-    "Use the provided tools for the menu and cart, and never invent items or prices. "
-    "When the customer changes the cart, call get_cart and read back every item, quantity, and the "
-    "subtotal before asking them to confirm. "
-    "When the customer explicitly says to place or confirm the order, you MUST call "
-    "create_mock_order with the customer's exact words in customer_confirmation. "
-    "Never say the order is placed unless create_mock_order returned status MOCK_ORDER_CREATED. "
-    "This is a demo with sample data only. Never claim that a real Toast order was placed, and never "
-    "call a real restaurant ordering API."
+"Always reply in English. Speak naturally and keep replies concise. "
+"Use the provided tools for all menu and cart operations. Never invent menu items, prices, "
+"quantities, or tool results. "
+"Use show_menu to answer menu questions. "
+"Use add_to_cart to add items or increase their quantities. "
+"Use remove_from_cart to decrease an item's quantity by the requested amount. "
+"Use remove_item_from_cart to remove an item completely, regardless of its quantity. "
+"Use set_item_quantity to set an item's final quantity exactly as requested; do not add "
+"the requested quantity to the existing quantity. "
+"Use replace_cart_item to replace an existing cart item with another available menu item. "
+"If a requested replacement is unavailable, explain that and leave the cart unchanged. "
+"After every successful cart change, call get_cart and read back every item, quantity, "
+"and the subtotal. "
+"Before placing an order, review the current cart and ask the customer to confirm. "
+"When the customer explicitly confirms they want to place the order, you MUST call "
+"create_mock_order with the customer's exact words in customer_confirmation. "
+"Never claim the order is placed unless create_mock_order returns "
+"status MOCK_ORDER_CREATED. "
+"the customer's exact confirmation words in customer_confirmation. "
+"Never claim the order is placed unless create_mock_order returns status MOCK_ORDER_CREATED. "
+"This is a demo with sample data only. Never claim that a real Toast order was placed, "
+"and never call a real restaurant ordering API."
 )
 
 
@@ -78,11 +91,24 @@ def _on_apple_silicon() -> bool:
     return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
+
 def _default_ssl_context_has_certs() -> bool:
+    """Return whether the configured default SSL context has usable CA certificates."""
+    cert_file = os.environ.get("SSL_CERT_FILE")
+    cert_dir = os.environ.get("SSL_CERT_DIR")
+
+    # Explicitly configured paths must exist before we trust the default context.
+    if cert_file and not os.path.isfile(cert_file):
+        return False
+
+    if cert_dir and not os.path.isdir(cert_dir):
+        return False
+
     try:
         context = ssl.create_default_context()
-    except Exception:
+    except (OSError, ssl.SSLError, ValueError):
         return False
+
     return bool(context.get_ca_certs())
 
 
