@@ -22,7 +22,10 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(
             names,
-            ["show_menu", "add_to_cart", "remove_from_cart", "get_cart", "create_mock_order"],
+            ["show_menu", "add_to_cart", "remove_from_cart", "get_cart", "create_mock_order",
+             "remove_item_from_cart",
+        "set_item_quantity",
+        "replace_cart_item",],
         )
         for tool in order_tools.TOOLS:
             self.assertEqual(tool["type"], "function")

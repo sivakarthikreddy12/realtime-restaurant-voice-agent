@@ -217,20 +217,57 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Read the restaurant's sample menu and prices.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
-    {
-        "type": "function",
-        "name": "add_to_cart",
-        "description": "Add one or more valid menu items to the customer's current cart.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "item_name": {"type": "string", "description": "Menu item name or alias"},
-                "quantity": {"type": "integer", "minimum": 1, "maximum": 20},
+
+{
+    "type": "function",
+    "name": "add_to_cart",
+    "description": (
+        "Add one or more valid menu items to the customer's current cart. "
+        "Use item_name and quantity for a single item, or items for "
+        "multiple items in one call. If quantity is omitted, default to 1."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "item_name": {
+                "type": "string",
+                "description": "Single menu item name or alias."
             },
-            "required": ["item_name", "quantity"],
-            "additionalProperties": False,
+            "quantity": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "description": "Quantity for the single item; defaults to 1."
+            },
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 20,
+                "description": "Multiple items to add in one call.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item_name": {
+                            "type": "string",
+                            "description": "Menu item name or alias."
+                        },
+                        "quantity": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20,
+                            "description": "Quantity; defaults to 1."
+                        }
+                    },
+                    "required": ["item_name"],
+                    "additionalProperties": False
+                }
+            }
         },
-    },
+        "required": [],
+        "additionalProperties": False
+    }
+},
+
     {
         "type": "function",
         "name": "remove_from_cart",
@@ -272,10 +309,85 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    
+    
+    
+    
+    {
+        "type": "function",
+        "name": "remove_item_from_cart",
+        "description": (
+            "Remove an entire menu item from the cart, regardless of its "
+            "current quantity. Use when the customer says remove all, "
+            "remove the item completely, or delete the item."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_name": {
+                    "type": "string",
+                    "description": "Menu item to remove completely."
+                }
+            },
+            "required": ["item_name"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "set_item_quantity",
+        "description": (
+            "Set an item's final quantity to the requested number. "
+            "Do not add to its existing quantity. Use when the customer "
+            "says make it, change it to, or set it to a specific quantity."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_name": {
+                    "type": "string",
+                    "description": "Menu item to update."
+                },
+                "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Desired final quantity."
+                }
+            },
+            "required": ["item_name", "quantity"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "replace_cart_item",
+        "description": (
+            "Replace an item already in the cart with another valid menu "
+            "item. Preserve the old item's quantity. If the replacement "
+            "item is already in the cart, combine the quantities."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "old_item_name": {
+                    "type": "string",
+                    "description": "Existing item to replace."
+                },
+                "new_item_name": {
+                    "type": "string",
+                    "description": "Replacement item from the menu."
+                }
+            },
+            "required": ["old_item_name", "new_item_name"],
+            "additionalProperties": False,
+        },
+    },
+
 ]
 
 
-async def execute_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _execute_tool_impl(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute one menu/cart tool and return a JSON-serializable result."""
 
     global PENDING_CONFIRMATION
@@ -287,26 +399,139 @@ async def execute_tool(name: str, arguments: dict[str, Any] | None = None) -> di
         with _CART_LOCK:
             return {"menu": MENU, "currency": "USD", "note": "Sample menu only; no real restaurant is contacted."}
 
+    
+    
     if name == "add_to_cart":
-        item = _find_item(args.get("item_name", ""))
-        quantity = _parse_quantity(args.get("quantity"), default=1)
-        if not item:
-            return {
-                "error": "Item is not on the sample menu.",
-                "available_items": _menu_names(),
-            }
-        if quantity is None:
-            return {"error": "Quantity must be a whole number between 1 and 20."}
+    # Support both batch requests and the existing single-item format.
+        is_batch = "items" in args
+
+        if is_batch:
+            if "item_name" in args or "quantity" in args:
+                return {
+                "error": (
+                    "Provide either 'items' or the single-item "
+                    "arguments 'item_name' and 'quantity', not both."
+                    )
+                }
+
+            requested_items = args["items"]
+
+            if not isinstance(requested_items, list) or not requested_items:
+                return {"error": "'items' must be a non-empty list."}
+
+            if len(requested_items) > 20:
+                return {
+                    "error": (
+                        "A maximum of 20 item entries can be added "
+                        "in one call."
+                    )
+                }
+        else:
+        # Keep the legacy single-item input format working.
+            requested_items = [{
+                "item_name": args.get("item_name", ""),
+                "quantity": args.get("quantity"),
+            }]
+
+        validated_items: list[tuple[dict[str, Any], int]] = []
+        invalid_items: list[dict[str, str]] = []
+
+        # Validate every entry. In batch mode, one invalid entry
+        # must not prevent other valid entries from being added.
+        for requested in requested_items:
+            if not isinstance(requested, dict):
+                if is_batch:
+                    invalid_items.append({
+                        "item_name": str(requested),
+                        "reason": (
+                            "Each entry must be an object containing "
+                            "'item_name' and 'quantity'."
+                        ),
+                    })
+                    continue
+
+                return {
+                    "error": "The item must be a valid JSON object."
+                }
+
+            item_name = requested.get("item_name", "")
+            item = _find_item(item_name)
+            quantity = _parse_quantity(requested.get("quantity"))
+
+            if not item:
+                reason = "Item is not on the sample menu."
+
+                if is_batch:
+                    invalid_items.append({
+                        "item_name": str(item_name),
+                        "reason": reason,
+                    })
+                    continue
+
+                return {
+                    "error": reason,
+                    "available_items": _menu_names(),
+                }
+
+            if quantity is None:
+                reason = (
+                    "Quantity must be a whole number between 1 and 20."
+                )
+
+                if is_batch:
+                    invalid_items.append({
+                        "item_name": item["name"],
+                        "reason": reason,
+                    })
+                    continue
+
+                return {"error": reason}
+
+            validated_items.append((item, quantity))
+
+        # Add all valid entries together while holding the cart lock.
+        # If no entries are valid, the cart remains unchanged.
         with _CART_LOCK:
-            CART[item["name"]] = CART.get(item["name"], 0) + quantity
+            if validated_items:
+                for item, quantity in validated_items:
+                    canonical_name = item["name"]
+                    CART[canonical_name] = (
+                        CART.get(canonical_name, 0) + quantity
+                    )
+
+            # The cart changed, so require confirmation again.
+                PENDING_CONFIRMATION = False
+
             details, total = _cart_details()
-            PENDING_CONFIRMATION = False
+
+        added_items = [
+            {"name": item["name"], "quantity": quantity}
+            for item, quantity in validated_items
+        ]
+
+        if not is_batch:
+        # Preserve the legacy single-item response shape.
             return {
-                "added": {"name": item["name"], "quantity": quantity},
+                "added": added_items[0],
                 "cart": details,
                 "subtotal": total,
             }
 
+        if added_items and invalid_items:
+            status = "partial_success"
+        elif added_items:
+            status = "success"
+        else:
+            status = "no_items_added"
+
+        return {
+            "status": status,
+            "added": added_items,
+            "invalid_items": invalid_items,
+            "cart": details,
+            "subtotal": total,
+        }
+    
     if name == "remove_from_cart":
         item = _find_item(args.get("item_name", ""))
         quantity = _parse_quantity(args.get("quantity"), default=1)
@@ -343,6 +568,148 @@ async def execute_tool(name: str, arguments: dict[str, Any] | None = None) -> di
                 result["note"] = f"Only {current} {item['name']} were in the cart."
             return result
 
+    
+    if name == "remove_item_from_cart":
+        item = _find_item(args.get("item_name", ""))
+
+        if not item:
+            return {
+                "error": "Item is not on the sample menu.",
+                "available_items": _menu_names(),
+            }
+
+        with _CART_LOCK:
+            current = CART.get(item["name"], 0)
+
+            if current == 0:
+                details, total = _cart_details()
+                return {
+                    "error": f"{item['name']} is not in the cart.",
+                    "cart": details,
+                    "subtotal": total,
+                }
+
+            CART.pop(item["name"], None)
+            PENDING_CONFIRMATION = False
+            details, total = _cart_details()
+
+            return {
+                "removed": {
+                    "name": item["name"],
+                    "quantity": current,
+                },
+                "cart": details,
+                "subtotal": total,
+            }
+            
+
+    if name == "set_item_quantity":
+        item = _find_item(args.get("item_name", ""))
+        quantity = _parse_quantity(args.get("quantity"), default=0)
+
+        if not item:
+            return {
+                "error": "Item is not on the sample menu.",
+                "available_items": _menu_names(),
+            }
+
+        if quantity is None:
+            return {
+                "error": "Quantity must be a whole number between 1 and 20."
+            }
+
+        with _CART_LOCK:
+            if item["name"] not in CART:
+                details, total = _cart_details()
+                return {
+                    "error": f"{item['name']} is not in the cart.",
+                    "cart": details,
+                    "subtotal": total,
+                }
+
+            previous_quantity = CART[item["name"]]
+            CART[item["name"]] = quantity
+            PENDING_CONFIRMATION = False
+            details, total = _cart_details()
+
+            return {
+                "updated": {
+                    "name": item["name"],
+                    "previous_quantity": previous_quantity,
+                    "quantity": quantity,
+                },
+                "cart": details,
+                "subtotal": total,
+            }
+            
+            
+
+    if name == "replace_cart_item":
+        old_item = _find_item(args.get("old_item_name", ""))
+        new_item = _find_item(args.get("new_item_name", ""))
+
+        # Validate both items before modifying the cart.
+        if not old_item:
+            return {
+                "error": "The item to replace is not on the sample menu.",
+                "available_items": _menu_names(),
+            }
+
+        if not new_item:
+            return {
+                "error": "The replacement item is not on the sample menu.",
+                "available_items": _menu_names(),
+            }
+
+        if old_item["name"] == new_item["name"]:
+            return {
+                "error": "The old and replacement items are the same."
+            }
+
+        with _CART_LOCK:
+            old_name = old_item["name"]
+            new_name = new_item["name"]
+            old_quantity = CART.get(old_name, 0)
+
+            if old_quantity == 0:
+                details, total = _cart_details()
+                return {
+                    "error": f"{old_name} is not in the cart.",
+                    "cart": details,
+                    "subtotal": total,
+                }
+
+            new_quantity = CART.get(new_name, 0) + old_quantity
+
+            if new_quantity > 20:
+                return {
+                    "error": (
+                        "Replacement would exceed the maximum quantity "
+                        "of 20 for the new item. The cart was not changed."
+                    ),
+                    "cart": _cart_details()[0],
+                }
+
+            # Both changes occur under the same lock.
+            CART.pop(old_name, None)
+            CART[new_name] = new_quantity
+            PENDING_CONFIRMATION = False
+            details, total = _cart_details()
+
+            return {
+                "replaced": {
+                    "old_item": old_name,
+                    "new_item": new_name,
+                    "quantity_moved": old_quantity,
+                    "new_total_quantity": new_quantity,
+                },
+                "cart": details,
+                "subtotal": total,
+            }
+    
+    
+    
+    
     if name == "get_cart":
         with _CART_LOCK:
             details, total = _cart_details()
@@ -394,3 +761,12 @@ async def execute_tool(name: str, arguments: dict[str, Any] | None = None) -> di
         return receipt
 
     return {"error": f"Unknown tool: {name}"}
+
+async def execute_tool(
+    name: str,
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute an order tool through LangGraph."""
+    from tool_graph import run_tool_graph
+
+    return await run_tool_graph(name, arguments)
