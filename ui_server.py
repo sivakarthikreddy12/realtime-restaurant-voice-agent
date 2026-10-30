@@ -25,9 +25,10 @@ import sys
 import time
 import webbrowser
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any,cast
 
 import uvicorn
+import certifi
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from openai import AsyncOpenAI
@@ -64,10 +65,19 @@ def port_open(host: str, port: int, timeout: float = 0.25) -> bool:
         return False
 
 
-def build_browser_session_update(config: RealtimeAudioClientConfig) -> dict[str, Any]:
+def build_browser_session_update(
+    config: RealtimeAudioClientConfig,
+) -> dict[str, Any]:
     session_update = build_session_update(config)
+
     turn_detection = session_update["session"]["audio"]["input"]["turn_detection"]
-    turn_detection.update({"create_response": True, "silence_duration_ms": 700})
+    turn_detection.update(
+        {
+            "create_response": True,
+            "silence_duration_ms": 700,
+        }
+    )
+
     return session_update
 
 
@@ -129,6 +139,10 @@ def start_voice_backend(options: argparse.Namespace) -> subprocess.Popen[Any] | 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env["NLTK_DATA"] = str(NLTK_DATA_DIR)
+    ca_bundle = certifi.where()
+    env["SSL_CERT_FILE"] = ca_bundle
+    env["REQUESTS_CA_BUNDLE"] = ca_bundle
+    env["CURL_CA_BUNDLE"] = ca_bundle
     command = [sys.executable, "-m", "speech_to_speech.cli", *build_serve_argv(options)]
     print("Starting voice backend:")
     print("  " + " ".join(command), flush=True)
@@ -203,7 +217,8 @@ class BrowserSession:
         )
         try:
             async with client.realtime.connect(model="local") as conn:
-                await conn.send(build_browser_session_update(config))
+                session_update = build_browser_session_update(config)
+                await conn.send(cast(Any, session_update))
                 while True:
                     event = await asyncio.wait_for(conn.recv(), timeout=30)
                     if event.type == "session.updated":
