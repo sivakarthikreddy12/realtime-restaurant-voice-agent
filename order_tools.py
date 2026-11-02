@@ -34,6 +34,7 @@ MENU: list[dict[str, Any]] = [
 
 CART: dict[str, int] = {}
 PENDING_CONFIRMATION = False
+PENDING_CART_PLAN: dict[str, Any] | None = None
 
 _CART_LOCK = threading.RLock()
 
@@ -96,10 +97,17 @@ _NEGATIONS = {
 def reset_state() -> None:
     """Clear the cart and confirmation state (used by tests and new sessions)."""
 
-    global PENDING_CONFIRMATION
+    global PENDING_CONFIRMATION, PENDING_CART_PLAN
     with _CART_LOCK:
         CART.clear()
         PENDING_CONFIRMATION = False
+        PENDING_CART_PLAN = None
+
+
+def discard_pending_cart_plan() -> None:
+    global PENDING_CART_PLAN
+    with _CART_LOCK:
+        PENDING_CART_PLAN = None
 
 
 def _normalize(text: Any) -> str:
@@ -208,6 +216,18 @@ def _is_explicit_confirmation(value: Any) -> bool:
         if words & {"order", "cart", "it", "that", "confirm", "place", "submit"}:
             return True
     return False
+
+
+def _is_plan_approval(value: Any) -> bool:
+    """Recognize approval of a proposed edit without treating 'change' as a refusal."""
+    normalized = _normalize(value)
+    if normalized in _AFFIRMATIVE_EXACT:
+        return True
+    return bool(re.fullmatch(
+        r"(yes|yeah|yep|yup|sure|ok|okay|approve|approved)( please)?"
+        r"( (make|do|apply) (that|this|those|these|the)? (change|changes|edit|edits|plan))?",
+        normalized,
+    ) or re.fullmatch(r"go ahead( with (that|this|the) (change|changes|edit|edits|plan))?", normalized))
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -391,6 +411,222 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+_CART_PLAN_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": "apply_cart_plan",
+    "description": (
+        "Translate the customer's entire cart-change request into one structured plan. "
+        "Use operations with action add, increase, decrease, set_quantity, remove, or replace. "
+        "Use canonical menu names when known; for unavailable items, preserve the name the "
+        "customer said. Include a short item_evidence phrase from the customer's latest turn "
+        "for each referenced item. Include quantity_evidence with the spoken amount, or an empty "
+        "string when using the default quantity of one. For replacement, include replacement_item_name and "
+        "replacement_item_evidence. Set needs_clarification=true and provide a question if "
+        "the intended item, action, or quantity is ambiguous. Set confidence honestly from "
+        "0 to 1. The server validates the plan and requires customer approval before destructive "
+        "changes. Never use separate add/remove tools."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "operations": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["add", "increase", "decrease", "set_quantity", "remove", "replace"],
+                        },
+                        "item_name": {"type": "string"},
+                        "item_evidence": {"type": "string"},
+                        "quantity_evidence": {"type": "string"},
+                        "replacement_item_name": {"type": "string"},
+                        "replacement_item_evidence": {"type": "string"},
+                        "quantity": {"type": "integer", "minimum": 0, "maximum": 20},
+                    },
+                    "required": ["action", "item_name", "item_evidence", "quantity_evidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "needs_clarification": {"type": "boolean"},
+            "clarification_question": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["operations", "needs_clarification", "clarification_question", "confidence"],
+        "additionalProperties": False,
+    },
+}
+
+_CONFIRM_CART_PLAN_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": "confirm_cart_plan",
+    "description": (
+        "Apply the pending cart plan only after the customer explicitly approves the "
+        "proposed changes. Pass the customer's exact approval words."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"confirmation": {"type": "string"}},
+        "required": ["confirmation"],
+        "additionalProperties": False,
+    },
+}
+
+# Keep legacy operations executable for compatibility, but do not expose them to the
+# assistant. All model-driven cart changes go through the structured plan tool.
+TOOLS = [
+    tool for tool in TOOLS
+    if tool.get("name") in {"show_menu", "get_cart", "create_mock_order"}
+]
+TOOLS.extend([_CART_PLAN_TOOL, _CONFIRM_CART_PLAN_TOOL])
+
+
+def _prepare_cart_plan(operations: Any) -> tuple[list[dict[str, Any]], list[dict[str, str]], bool]:
+    if not isinstance(operations, list) or len(operations) > 20:
+        return [], [{"item_name": "request", "reason": "The cart plan must contain at most 20 operations."}], False
+    with _CART_LOCK:
+        simulated = dict(CART)
+    valid: list[dict[str, Any]] = []
+    invalid: list[dict[str, str]] = []
+    requires_confirmation = False
+    for raw in operations:
+        if not isinstance(raw, dict):
+            invalid.append({"item_name": "request", "reason": "Invalid cart operation."})
+            continue
+        action = raw.get("action")
+        item = _find_item(raw.get("item_name", ""))
+        raw_name = str(raw.get("item_name", "")).strip()
+        if action not in {"add", "increase", "decrease", "set_quantity", "remove", "replace"}:
+            invalid.append({"item_name": raw_name or "item", "reason": "Unknown cart action."})
+            continue
+        if not item:
+            invalid.append({"item_name": raw_name or "item", "reason": "Item is not on the sample menu."})
+            continue
+        name = item["name"]
+        quantity = raw.get("quantity", 1)
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0 or quantity > 20:
+            invalid.append({"item_name": name, "reason": "Quantity must be a whole number from 0 to 20."})
+            continue
+        op: dict[str, Any] = {"action": action, "item_name": name, "quantity": quantity}
+        current = simulated.get(name, 0)
+        if action in {"add", "increase"}:
+            if quantity < 1 or current + quantity > 20:
+                invalid.append({"item_name": name, "reason": "Requested quantity is outside the allowed cart limit."})
+                continue
+            simulated[name] = current + quantity
+        elif action == "set_quantity":
+            if current == 0:
+                invalid.append({"item_name": name, "reason": f"{name} is not in the cart."})
+                continue
+            if quantity > 20:
+                invalid.append({"item_name": name, "reason": "Quantity cannot exceed 20."})
+                continue
+            requires_confirmation |= quantity < current
+            simulated[name] = quantity
+        elif action in {"decrease", "remove"}:
+            if current == 0:
+                invalid.append({"item_name": name, "reason": f"{name} is not in the cart."})
+                continue
+            remove_quantity = current if action == "remove" else quantity
+            if remove_quantity < 1 or remove_quantity > current:
+                invalid.append({"item_name": name, "reason": f"Only {current} {name} are in the cart."})
+                continue
+            requires_confirmation = True
+            remaining = current - remove_quantity
+            if remaining:
+                simulated[name] = remaining
+            else:
+                simulated.pop(name, None)
+            op["quantity"] = remove_quantity
+        else:  # replace
+            replacement = _find_item(raw.get("replacement_item_name", ""))
+            replacement_raw = str(raw.get("replacement_item_name", "")).strip()
+            if not replacement:
+                invalid.append({"item_name": replacement_raw or "replacement item", "reason": "Replacement item is not on the sample menu."})
+                continue
+            new_name = replacement["name"]
+            if new_name == name or current == 0:
+                invalid.append({"item_name": name, "reason": "Replacement needs a different item already in the cart."})
+                continue
+            combined = simulated.get(new_name, 0) + current
+            if combined > 20:
+                invalid.append({"item_name": new_name, "reason": "Replacement would exceed the quantity limit."})
+                continue
+            op["replacement_item_name"] = new_name
+            simulated.pop(name, None)
+            simulated[new_name] = combined
+            requires_confirmation = True
+        valid.append(op)
+    return valid, invalid, requires_confirmation
+
+
+async def _run_cart_plan(operations: list[dict[str, Any]], invalid: list[dict[str, str]]) -> dict[str, Any]:
+    global PENDING_CART_PLAN, PENDING_CONFIRMATION
+    applied: list[dict[str, Any]] = []
+    for op in operations:
+        action, name, quantity = op["action"], op["item_name"], op["quantity"]
+        if action in {"add", "increase"}:
+            result = await _execute_tool_impl("add_to_cart", {"item_name": name, "quantity": quantity})
+        elif action == "decrease":
+            result = await _execute_tool_impl("remove_from_cart", {"item_name": name, "quantity": quantity})
+        elif action == "remove":
+            result = await _execute_tool_impl("remove_item_from_cart", {"item_name": name})
+        elif action == "set_quantity":
+            if quantity == 0:
+                result = await _execute_tool_impl("remove_item_from_cart", {"item_name": name})
+            else:
+                result = await _execute_tool_impl("set_item_quantity", {"item_name": name, "quantity": quantity})
+        else:
+            result = await _execute_tool_impl("replace_cart_item", {"old_item_name": name, "new_item_name": op["replacement_item_name"]})
+        applied.append({"operation": op, "result": result})
+    with _CART_LOCK:
+        details, total = _cart_details()
+        PENDING_CART_PLAN = None
+        PENDING_CONFIRMATION = False
+    return {"status": "applied", "operation_results": applied, "invalid_items": invalid,
+            "available_items": _menu_names() if invalid else [], "cart": details, "subtotal": total}
+
+
+async def _execute_cart_plan(args: dict[str, Any]) -> dict[str, Any]:
+    global PENDING_CART_PLAN
+    with _CART_LOCK:
+        PENDING_CART_PLAN = None
+    if args.get("needs_clarification") or not isinstance(args.get("confidence"), (int, float)) or args["confidence"] < 0.8:
+        return {"status": "clarification_required", "question": str(args.get("clarification_question") or "Could you clarify what change you want?")}
+    operations, invalid, needs_confirmation = _prepare_cart_plan(args.get("operations"))
+    if not operations:
+        details, total = _cart_details()
+        return {"status": "no_change", "invalid_items": invalid, "available_items": _menu_names() if invalid else [], "cart": details, "subtotal": total}
+    if needs_confirmation:
+        with _CART_LOCK:
+            PENDING_CART_PLAN = {"operations": operations, "invalid_items": invalid}
+            details, total = _cart_details()
+        return {"status": "confirmation_required", "planned_operations": operations, "invalid_items": invalid,
+                "cart": details, "subtotal": total}
+    return await _run_cart_plan(operations, invalid)
+
+
+async def _confirm_cart_plan(args: dict[str, Any]) -> dict[str, Any]:
+    global PENDING_CART_PLAN
+    with _CART_LOCK:
+        pending = PENDING_CART_PLAN
+    if not pending:
+        return {"status": "no_pending_plan", "error": "There is no pending cart change to approve."}
+    if not _is_plan_approval(args.get("confirmation", "")):
+        with _CART_LOCK:
+            PENDING_CART_PLAN = None
+        return {"status": "cancelled", "error": "The proposed cart changes were not applied."}
+    operations, newly_invalid, _ = _prepare_cart_plan(pending["operations"])
+    if newly_invalid:
+        with _CART_LOCK:
+            PENDING_CART_PLAN = None
+        details, total = _cart_details()
+        return {"status": "no_change", "invalid_items": newly_invalid, "cart": details, "subtotal": total}
+    return await _run_cart_plan(operations, pending.get("invalid_items", []))
+
+
 async def _execute_tool_impl(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute one menu/cart tool and return a JSON-serializable result."""
 
@@ -398,6 +634,11 @@ async def _execute_tool_impl(name: str, arguments: dict[str, Any] | None = None)
     args = arguments or {}
     if not isinstance(args, dict):
         return {"error": "Tool arguments must be a JSON object."}
+
+    if name == "apply_cart_plan":
+        return await _execute_cart_plan(args)
+    if name == "confirm_cart_plan":
+        return await _confirm_cart_plan(args)
 
     if name == "show_menu":
         with _CART_LOCK:
@@ -733,6 +974,8 @@ async def _execute_tool_impl(name: str, arguments: dict[str, Any] | None = None)
 
     if name == "create_mock_order":
         confirmation = args.get("customer_confirmation", "")
+        if PENDING_CART_PLAN is not None:
+            return {"error": "Order not created. A proposed cart change is still awaiting approval."}
         if not _is_explicit_confirmation(confirmation):
             return {
                 "error": (

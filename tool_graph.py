@@ -21,6 +21,8 @@ TOOL_NAMES = (
     "replace_cart_item",
     "get_cart",
     "create_mock_order",
+    "apply_cart_plan",
+    "confirm_cart_plan",
 )
 
 

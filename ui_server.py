@@ -94,27 +94,6 @@ _CART_READ_RE = re.compile(
     r"\b(cart|subtotal|total|confirm|confirmation|review|what do i have|what's in my)\b",
     re.I,
 )
-_ADD_REQUEST_RE = re.compile(
-    r"\b(add|put|include|order|want|would like|i'd like|i would like|can i get|i'll have|give me)\b",
-    re.I,
-)
-_QUANTITY_WORD_RE = re.compile(r"\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b", re.I)
-_REMOVE_REQUEST_RE = re.compile(r"\b(remove|cancel|delete|take off|drop)\b", re.I)
-_SET_QUANTITY_RE = re.compile(r"\b(set|make|change|increase|decrease|quantity)\b", re.I)
-_REPLACE_REQUEST_RE = re.compile(
-    r"\b(?:replace|swap|exchange|substitute|switch|trade)\b"
-    r"|\b(?:instead of|in place of|rather than)\b"
-    r"|\bchange\b.{0,50}\b(?:to|for)\b",
-    re.I,
-)
-_NEGATED_REPLACE_REQUEST_RE = re.compile(
-    r"\b(?:don't|do not|never|shouldn't|should not)\s+"
-    r"(?:(?:want|need)\s+(?:you\s+)?to\s+)?"
-    r"(?:replace|swap|exchange|substitute|switch|trade)\b"
-    r"|\b(?:don't|do not|never)\s+want\b.{0,80}"
-    r"\b(?:instead of|in place of|rather than)\b",
-    re.I,
-)
 _CONFIRMATION_QUESTION_RE = re.compile(
     r"\b(can|could|would) you (please )?(confirm|place|submit)|\bwhat (is|are) (in|on) my order\b",
     re.I,
@@ -133,6 +112,10 @@ def is_order_related_turn(text: str) -> bool:
 
 def _is_clear_yes(text: str) -> bool:
     return bool(_CLEAR_YES_RE.fullmatch(order_tools._normalize(text)))
+
+
+def _is_clear_plan_yes(text: str) -> bool:
+    return order_tools._is_plan_approval(text) and "?" not in text
 
 
 def _mentions_item(text: str, item_name: str) -> bool:
@@ -172,12 +155,79 @@ def _mentions_item(text: str, item_name: str) -> bool:
     return False
 
 
+def cart_plan_matches_user_turn(user_text: str, arguments: dict[str, Any]) -> bool:
+    """Ground plan entities in the latest turn; action semantics come from the schema."""
+    operations = arguments.get("operations")
+    if not isinstance(operations, list):
+        return False
+    cart = order_tools.CART
+    for op in operations:
+        if not isinstance(op, dict):
+            return False
+        pairs = [(str(op.get("item_name", "")), str(op.get("item_evidence", "")))]
+        if op.get("action") == "replace":
+            pairs.append((str(op.get("replacement_item_name", "")), str(op.get("replacement_item_evidence", ""))))
+        for item_name, evidence in pairs:
+            if not item_name or not evidence:
+                return False
+            norm_evidence = order_tools._normalize(evidence)
+            norm_turn = order_tools._normalize(user_text)
+            pronoun = norm_evidence in {"it", "that", "that item", "this one", "that one"}
+            if pronoun:
+                if len(cart) != 1 or order_tools._normalize(next(iter(cart))) != order_tools._normalize(item_name):
+                    return False
+            elif norm_evidence not in norm_turn:
+                return False
+            # Evidence may be an ASR spelling; require the chosen item to agree with
+            # a known menu label/alias, unless it is explicitly an unavailable item.
+            resolved = order_tools._find_item(item_name)
+            if resolved and not _mentions_item(evidence, resolved["name"]):
+                return False
+            if not resolved:
+                requested_name = order_tools._normalize(item_name)
+                if requested_name not in norm_evidence and norm_evidence not in requested_name:
+                    if SequenceMatcher(None, requested_name, norm_evidence).ratio() < 0.76:
+                        return False
+        action = op.get("action")
+        quantity = op.get("quantity", 1)
+        quantity_evidence = order_tools._normalize(op.get("quantity_evidence", ""))
+        if action in {"add", "increase", "decrease", "set_quantity"}:
+            if quantity_evidence:
+                if quantity_evidence not in norm_turn:
+                    return False
+                word_numbers = {
+                    "one": 1, "a": 1, "an": 1, "two": 2, "three": 3,
+                    "four": 4, "five": 5, "six": 6, "seven": 7,
+                    "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+                    "twelve": 12, "thirteen": 13, "fourteen": 14,
+                    "fifteen": 15, "sixteen": 16, "seventeen": 17,
+                    "eighteen": 18, "nineteen": 19, "twenty": 20,
+                    "pair": 2, "couple": 2,
+                }
+                amount = next(
+                    (word_numbers[token] for token in quantity_evidence.split() if token in word_numbers),
+                    None,
+                )
+                if amount is None:
+                    amount = next(
+                        (int(token) for token in quantity_evidence.split() if token.isdigit()),
+                        None,
+                    )
+                if amount is None or amount != quantity:
+                    return False
+            elif quantity != 1 and not (action == "set_quantity" and quantity == 0):
+                return False
+            elif action in {"decrease", "set_quantity"} and not (action == "set_quantity" and quantity == 0):
+                return False
+    return True
+
+
 def tool_matches_user_intent(
     tool_name: str,
     user_text: str,
     arguments: dict[str, Any] | None = None,
 ) -> bool:
-    """Reject mutations the customer did not ask for on this turn."""
+    """Gate read-only tools and final order placement against the current turn."""
     text = user_text or ""
     if tool_name == "show_menu":
         return True  # Reading menu data has no side effects.
@@ -185,52 +235,6 @@ def tool_matches_user_intent(
         return bool(_CART_READ_RE.search(text) or _ORDER_TURN_RE.search(text))
     if tool_name == "create_mock_order":
         return bool(_is_clear_yes(text) and not _CONFIRMATION_QUESTION_RE.search(text))
-    if tool_name in {"add_to_cart"}:
-        if _REPLACE_REQUEST_RE.search(text):
-            return False
-        if _MENU_REQUEST_RE.search(text) and not _ADD_REQUEST_RE.search(text):
-            return False
-        args = arguments or {}
-        raw_items = args.get("items")
-        requested: list[Any] = raw_items if isinstance(raw_items, list) else [args]
-        names = [
-            str(item.get("item_name", ""))
-            for item in requested
-            if isinstance(item, dict)
-        ]
-        if not names or any(not name or not _mentions_item(text, name) for name in names):
-            return False
-        # Split compound utterances so a set-quantity clause does not authorize
-        # adding that same item, while a separate "add two shakes" clause still works.
-        clauses = re.split(r"\b(?:and|then|also)\b", text, flags=re.I)
-        for name in names:
-            clause = next((part for part in clauses if _mentions_item(part, name)), text)
-            if _SET_QUANTITY_RE.search(clause) and not re.search(r"\b(add|put|include)\b", clause, re.I):
-                return False
-            has_add_language = bool(_ADD_REQUEST_RE.search(clause))
-            has_quantity_language = bool(_QUANTITY_WORD_RE.search(clause))
-            if not (has_add_language or has_quantity_language):
-                return False
-        return True
-    if tool_name in {"remove_from_cart", "remove_item_from_cart"}:
-        return bool(
-            _REMOVE_REQUEST_RE.search(text)
-            and _mentions_item(text, str((arguments or {}).get("item_name", "")))
-        )
-    if tool_name == "set_item_quantity":
-        return bool(
-            _SET_QUANTITY_RE.search(text)
-            and _mentions_item(text, str((arguments or {}).get("item_name", "")))
-            and _QUANTITY_WORD_RE.search(text)
-        )
-    if tool_name == "replace_cart_item":
-        args = arguments or {}
-        return bool(
-            _REPLACE_REQUEST_RE.search(text)
-            and not _NEGATED_REPLACE_REQUEST_RE.search(text)
-            and _mentions_item(text, str(args.get("old_item_name", "")))
-            and _mentions_item(text, str(args.get("new_item_name", "")))
-        )
     return False
 
 
@@ -249,6 +253,34 @@ def format_verified_tool_response(
                     f"The subtotal is ${result['subtotal']:.2f}. No real restaurant order was placed."
                 )
             return f"I couldn't place the order: {result.get('error', 'the order was not created.')}"
+
+    plan_result = next((result for call, result in zip(calls, results)
+                        if call.get("name") in {"apply_cart_plan", "confirm_cart_plan"}), None)
+    if plan_result is not None:
+        status = plan_result.get("status")
+        if status == "clarification_required":
+            return str(plan_result.get("question") or "Could you clarify what change you want?")
+        if status == "confirmation_required":
+            changes = []
+            for op in plan_result.get("planned_operations", []):
+                action, name, qty = op.get("action"), op.get("item_name"), op.get("quantity")
+                if action == "replace":
+                    changes.append(f"replace {name} with {op.get('replacement_item_name')}")
+                elif action in {"remove", "decrease"}:
+                    changes.append(f"remove {qty} {name}" if action == "decrease" else f"remove {name}")
+                elif action in {"add", "increase"}:
+                    changes.append(f"add {qty} {name}")
+                else:
+                    changes.append(f"set {name} quantity to {qty}")
+            proposal = "I understood: " + "; ".join(changes) + "."
+            unavailable = [
+                f"{entry.get('item_name', 'That item')} is unavailable"
+                for entry in plan_result.get("invalid_items", [])
+                if isinstance(entry, dict)
+            ]
+            if unavailable:
+                proposal += " " + "; ".join(unavailable) + "."
+            return proposal + " I have not changed the cart yet. Should I make these changes?"
 
     menu_result = next(
         (result for call, result in zip(calls, results) if call.get("name") == "show_menu"),
@@ -272,6 +304,9 @@ def format_verified_tool_response(
                 problems.append(
                     f"{invalid.get('item_name', 'That item')} was not added: {invalid.get('reason', 'it is unavailable.')}"
                 )
+    for result in results:
+        if result.get("status") == "no_change" and result.get("error"):
+            problems.append(str(result["error"]))
 
     if cart_result is not None:
         items = cart_result.get("items", cart_result.get("cart", []))
@@ -432,8 +467,9 @@ class BrowserSession:
 
     def _note_user_text(self, text: str) -> None:
         self.latest_user_text = text.strip()
-        if not _is_clear_yes(self.latest_user_text):
+        if not (_is_clear_yes(self.latest_user_text) or _is_clear_plan_yes(self.latest_user_text)):
             self.awaiting_order_confirmation = False
+            order_tools.discard_pending_cart_plan()
 
     def _clear_response_buffer(self) -> None:
         self.buffered_assistant_text.clear()
@@ -456,6 +492,17 @@ class BrowserSession:
             await self._send_verified_response(
                 format_verified_tool_response([{"name": "show_menu"}], [result])
             )
+            return
+
+        if order_tools.PENDING_CART_PLAN and _is_clear_plan_yes(user_text):
+            result = await order_tools.execute_tool("confirm_cart_plan", {"confirmation": user_text})
+            await self.send({"type": "tool_result", "name": "confirm_cart_plan", "result": result})
+            cart_result = await order_tools.execute_tool("get_cart", {})
+            await self.send({"type": "tool_result", "name": "get_cart", "result": cart_result})
+            self.awaiting_order_confirmation = bool(cart_result.get("items"))
+            await self._send_verified_response(format_verified_tool_response(
+                [{"name": "confirm_cart_plan"}], [result], cart_result=cart_result
+            ))
             return
 
         if _is_clear_yes(user_text) and not _CONFIRMATION_QUESTION_RE.search(user_text):
@@ -515,7 +562,13 @@ class BrowserSession:
         results: list[dict[str, Any]] = []
         for call in calls:
             tool_started_at = time.perf_counter()
-            if call["name"] == "create_mock_order" and not self.awaiting_order_confirmation:
+            if call["name"] == "apply_cart_plan" and not call["arguments"].get("needs_clarification") and not cart_plan_matches_user_turn(self.active_response_user_text, call["arguments"]):
+                result = {"status": "clarification_required", "question": "I couldn't match that item to what you said, so I made no cart change. Could you repeat the item?"}
+            elif call["name"] == "confirm_cart_plan" and (not _is_clear_plan_yes(self.active_response_user_text) or not order_tools.PENDING_CART_PLAN):
+                result = {"status": "no_pending_plan", "error": "There is no approved pending change to apply."}
+            elif call["name"] not in {"apply_cart_plan", "confirm_cart_plan", "show_menu", "get_cart", "create_mock_order"}:
+                result = {"error": "Individual cart mutation tools are disabled; use a structured cart plan."}
+            elif call["name"] == "create_mock_order" and (not self.awaiting_order_confirmation or not _is_clear_yes(self.active_response_user_text)):
                 result = {
                     "error": "Order confirmation has not been requested by the app; no order was placed."
                 }
@@ -527,7 +580,10 @@ class BrowserSession:
                 }
             else:
                 try:
-                    result = await order_tools.execute_tool(call["name"], call["arguments"])
+                    arguments = call["arguments"]
+                    if call["name"] == "confirm_cart_plan":
+                        arguments = {"confirmation": self.active_response_user_text}
+                    result = await order_tools.execute_tool(call["name"], arguments)
                 except Exception as exc:
                     result = {"error": f"{type(exc).__name__}: {exc}"}
             self.log_latency(
@@ -552,13 +608,15 @@ class BrowserSession:
         if any(
             call["name"] in {
                 "add_to_cart", "remove_from_cart", "remove_item_from_cart",
-                "set_item_quantity", "replace_cart_item", "get_cart",
+                "set_item_quantity", "replace_cart_item", "get_cart", "apply_cart_plan", "confirm_cart_plan",
             }
             for call in calls
         ):
             cart_result = await order_tools.execute_tool("get_cart", {})
             await self.send({"type": "tool_result", "name": "get_cart", "result": cart_result})
-        if cart_result and cart_result.get("items"):
+        if any(r.get("status") == "confirmation_required" for r in results):
+            self.awaiting_order_confirmation = False
+        elif cart_result and cart_result.get("items"):
             self.awaiting_order_confirmation = True
         else:
             self.awaiting_order_confirmation = False
