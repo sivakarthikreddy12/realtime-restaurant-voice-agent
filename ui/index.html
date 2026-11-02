@@ -517,6 +517,7 @@
 
     function stopPlayback() {
       const ctx = state.playCtx;
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
       for (const source of state.audioSources) {
         try {
           source.stop();
@@ -526,6 +527,18 @@
       }
       state.audioSources.clear();
       state.nextPlayTime = ctx ? ctx.currentTime : 0;
+    }
+
+    function speakVerifiedResponse(text) {
+      if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
+        scheduleReadyStatus();
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "en-US";
+      utterance.onend = scheduleReadyStatus;
+      utterance.onerror = scheduleReadyStatus;
+      window.speechSynthesis.speak(utterance);
     }
 
     function assistantSpeaking() {
@@ -697,6 +710,14 @@
             break;
           case "assistant_done":
             finalizeAssistant(message.text);
+            break;
+          case "verified_response":
+            state.responseInterrupted = false;
+            stopPlayback();
+            appendAssistant(message.text);
+            finalizeAssistant(message.text);
+            setStatus("Speaking...", "speaking");
+            speakVerifiedResponse(message.text);
             break;
           case "audio":
             playAudio(message.audio);

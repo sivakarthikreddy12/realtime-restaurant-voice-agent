@@ -364,8 +364,12 @@ TOOLS: list[dict[str, Any]] = [
         "name": "replace_cart_item",
         "description": (
             "Replace an item already in the cart with another valid menu "
-            "item. Preserve the old item's quantity. If the replacement "
-            "item is already in the cart, combine the quantities."
+            "item. Use for customer requests such as replace, swap, exchange, "
+            "substitute, switch, change one item to another, or get one item "
+            "instead of another. Do not remove then add separately; this tool "
+            "validates both items before changing the cart. Preserve the old "
+            "item's quantity. If the replacement item is already in the cart, "
+            "combine the quantities."
         ),
         "parameters": {
             "type": "object",
@@ -528,6 +532,7 @@ async def _execute_tool_impl(name: str, arguments: dict[str, Any] | None = None)
             "status": status,
             "added": added_items,
             "invalid_items": invalid_items,
+            "available_items": _menu_names() if invalid_items else [],
             "cart": details,
             "subtotal": total,
         }

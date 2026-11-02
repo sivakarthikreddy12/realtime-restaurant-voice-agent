@@ -8,3 +8,4 @@ def test_cart_operations_are_documented():
     assert "replace_cart_item" in DEFAULT_INSTRUCTIONS
     assert "get_cart" in DEFAULT_INSTRUCTIONS
     assert "create_mock_order" in DEFAULT_INSTRUCTIONS
+    assert "unless the matching tool result confirms" in DEFAULT_INSTRUCTIONS

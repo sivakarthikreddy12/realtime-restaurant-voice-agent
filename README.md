@@ -116,6 +116,11 @@ A small local browser UI is included. It starts the Realtime voice backend
 automatically, shows the conversation, supports a microphone button, plays the
 spoken replies, and displays the live cart and tool results.
 
+Menu and cart turns in the browser UI are checked against the tool result before
+the reply is shown or spoken. These verified replies use the browser's built-in
+English speech voice; ordinary conversational replies continue using the
+configured TTS backend.
+
 ```bash
 source .venv/bin/activate
 python ui_server.py

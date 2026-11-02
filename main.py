@@ -47,6 +47,9 @@ DEFAULT_INSTRUCTIONS = (
 "Always reply in English. Speak naturally and keep replies concise. "
 "Use the provided tools for all menu and cart operations. Never invent menu items, prices, "
 "quantities, or tool results. "
+"Never claim that an item was added, removed, changed, or replaced unless the matching tool "
+"result confirms that exact change. If a tool rejects an item, say it was not added and list "
+"the available menu items from the tool result. Never infer success from the customer's request. "
 "Use show_menu to answer menu questions. "
 "Use add_to_cart to add items or increase their quantities. "
 "Use remove_from_cart to decrease an item's quantity by the requested amount. "
@@ -62,8 +65,6 @@ DEFAULT_INSTRUCTIONS = (
 "create_mock_order with the customer's exact words in customer_confirmation. "
 "Never claim the order is placed unless create_mock_order returns "
 "status MOCK_ORDER_CREATED. "
-"the customer's exact confirmation words in customer_confirmation. "
-"Never claim the order is placed unless create_mock_order returns status MOCK_ORDER_CREATED. "
 "This is a demo with sample data only. Never claim that a real Toast order was placed, "
 "and never call a real restaurant ordering API."
 )

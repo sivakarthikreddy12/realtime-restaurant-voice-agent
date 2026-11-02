@@ -17,8 +17,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+from difflib import SequenceMatcher
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -79,6 +81,229 @@ def build_browser_session_update(
     )
 
     return session_update
+
+
+_ORDER_TURN_RE = re.compile(
+    r"\b(menu|cart|order|add|added|remove|removed|cancel|replace|change|quantity|"
+    r"confirm|place|submit|burger|fries|coke|cola|milkshake|milk|shake|vanilla|"
+    r"coffee|pizza|i'd like|i would like|i want|can i get|i'll have|give me)\b",
+    re.IGNORECASE,
+)
+_MENU_REQUEST_RE = re.compile(r"\b(menu|what(?:'s| is| do you have).*available|what do you have)\b", re.I)
+_CART_READ_RE = re.compile(
+    r"\b(cart|subtotal|total|confirm|confirmation|review|what do i have|what's in my)\b",
+    re.I,
+)
+_ADD_REQUEST_RE = re.compile(
+    r"\b(add|put|include|order|want|would like|i'd like|i would like|can i get|i'll have|give me)\b",
+    re.I,
+)
+_QUANTITY_WORD_RE = re.compile(r"\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b", re.I)
+_REMOVE_REQUEST_RE = re.compile(r"\b(remove|cancel|delete|take off|drop)\b", re.I)
+_SET_QUANTITY_RE = re.compile(r"\b(set|make|change|increase|decrease|quantity)\b", re.I)
+_REPLACE_REQUEST_RE = re.compile(
+    r"\b(?:replace|swap|exchange|substitute|switch|trade)\b"
+    r"|\b(?:instead of|in place of|rather than)\b"
+    r"|\bchange\b.{0,50}\b(?:to|for)\b",
+    re.I,
+)
+_NEGATED_REPLACE_REQUEST_RE = re.compile(
+    r"\b(?:don't|do not|never|shouldn't|should not)\s+"
+    r"(?:(?:want|need)\s+(?:you\s+)?to\s+)?"
+    r"(?:replace|swap|exchange|substitute|switch|trade)\b"
+    r"|\b(?:don't|do not|never)\s+want\b.{0,80}"
+    r"\b(?:instead of|in place of|rather than)\b",
+    re.I,
+)
+_CONFIRMATION_QUESTION_RE = re.compile(
+    r"\b(can|could|would) you (please )?(confirm|place|submit)|\bwhat (is|are) (in|on) my order\b",
+    re.I,
+)
+_CLEAR_YES_RE = re.compile(
+    r"^(yes please|yes place the order|yes confirm|"
+    r"go ahead and place the order|place it|place the order|submit it|confirm it|"
+    r"i confirm|i confirm this one|okay i confirm|i confirm the order|"
+    r"yes please place the order|please place the order)$",
+)
+
+
+def is_order_related_turn(text: str) -> bool:
+    return bool(_ORDER_TURN_RE.search(text or ""))
+
+
+def _is_clear_yes(text: str) -> bool:
+    return bool(_CLEAR_YES_RE.fullmatch(order_tools._normalize(text)))
+
+
+def _mentions_item(text: str, item_name: str) -> bool:
+    normalized_text = order_tools._normalize(text)
+    matching_item = next(
+        (item for item in order_tools.MENU if item_name.casefold() == item["name"].casefold()),
+        None,
+    )
+    candidates = [item_name]
+    if matching_item is not None:
+        # Do not let a generic alias such as "burger" authorize Cheeseburger
+        # when the customer actually said "Chicken Burger".
+        other_names = [
+            order_tools._normalize(item["name"])
+            for item in order_tools.MENU
+            if item is not matching_item
+        ]
+        if any(f" {name} " in f" {normalized_text} " for name in other_names):
+            candidates = [matching_item["name"]]
+        else:
+            candidates = [matching_item["name"], *matching_item["aliases"]]
+    for candidate in candidates:
+        normalized_candidate = order_tools._normalize(candidate)
+        if not normalized_candidate:
+            continue
+        if f" {normalized_candidate} " in f" {normalized_text} ":
+            return True
+        candidate_tokens = normalized_candidate.split()
+        text_tokens = normalized_text.split()
+        if len(candidate_tokens) > 1 and any(token in text_tokens for token in candidate_tokens):
+            return True
+        if len(candidate_tokens) == 1 and any(
+            SequenceMatcher(None, candidate_tokens[0], token).ratio() >= 0.78
+            for token in text_tokens
+        ):
+            return True
+    return False
+
+
+def tool_matches_user_intent(
+    tool_name: str,
+    user_text: str,
+    arguments: dict[str, Any] | None = None,
+) -> bool:
+    """Reject mutations the customer did not ask for on this turn."""
+    text = user_text or ""
+    if tool_name == "show_menu":
+        return True  # Reading menu data has no side effects.
+    if tool_name == "get_cart":
+        return bool(_CART_READ_RE.search(text) or _ORDER_TURN_RE.search(text))
+    if tool_name == "create_mock_order":
+        return bool(_is_clear_yes(text) and not _CONFIRMATION_QUESTION_RE.search(text))
+    if tool_name in {"add_to_cart"}:
+        if _REPLACE_REQUEST_RE.search(text):
+            return False
+        if _MENU_REQUEST_RE.search(text) and not _ADD_REQUEST_RE.search(text):
+            return False
+        args = arguments or {}
+        raw_items = args.get("items")
+        requested: list[Any] = raw_items if isinstance(raw_items, list) else [args]
+        names = [
+            str(item.get("item_name", ""))
+            for item in requested
+            if isinstance(item, dict)
+        ]
+        if not names or any(not name or not _mentions_item(text, name) for name in names):
+            return False
+        # Split compound utterances so a set-quantity clause does not authorize
+        # adding that same item, while a separate "add two shakes" clause still works.
+        clauses = re.split(r"\b(?:and|then|also)\b", text, flags=re.I)
+        for name in names:
+            clause = next((part for part in clauses if _mentions_item(part, name)), text)
+            if _SET_QUANTITY_RE.search(clause) and not re.search(r"\b(add|put|include)\b", clause, re.I):
+                return False
+            has_add_language = bool(_ADD_REQUEST_RE.search(clause))
+            has_quantity_language = bool(_QUANTITY_WORD_RE.search(clause))
+            if not (has_add_language or has_quantity_language):
+                return False
+        return True
+    if tool_name in {"remove_from_cart", "remove_item_from_cart"}:
+        return bool(
+            _REMOVE_REQUEST_RE.search(text)
+            and _mentions_item(text, str((arguments or {}).get("item_name", "")))
+        )
+    if tool_name == "set_item_quantity":
+        return bool(
+            _SET_QUANTITY_RE.search(text)
+            and _mentions_item(text, str((arguments or {}).get("item_name", "")))
+            and _QUANTITY_WORD_RE.search(text)
+        )
+    if tool_name == "replace_cart_item":
+        args = arguments or {}
+        return bool(
+            _REPLACE_REQUEST_RE.search(text)
+            and not _NEGATED_REPLACE_REQUEST_RE.search(text)
+            and _mentions_item(text, str(args.get("old_item_name", "")))
+            and _mentions_item(text, str(args.get("new_item_name", "")))
+        )
+    return False
+
+
+def format_verified_tool_response(
+    calls: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    cart_result: dict[str, Any] | None = None,
+) -> str:
+    """Create customer-facing text from tool data instead of model paraphrases."""
+    for call, result in zip(calls, results):
+        if call.get("name") == "create_mock_order":
+            if result.get("status") == "MOCK_ORDER_CREATED":
+                return (
+                    f"Your demo order {result['order_id']} is confirmed. "
+                    f"The subtotal is ${result['subtotal']:.2f}. No real restaurant order was placed."
+                )
+            return f"I couldn't place the order: {result.get('error', 'the order was not created.')}"
+
+    menu_result = next(
+        (result for call, result in zip(calls, results) if call.get("name") == "show_menu"),
+        None,
+    )
+    if menu_result is not None and isinstance(menu_result.get("menu"), list):
+        entries = ", ".join(
+            f"{item['name']} for ${float(item['price']):.2f}"
+            for item in menu_result["menu"]
+            if isinstance(item, dict) and "name" in item and "price" in item
+        )
+        return f"Our menu is: {entries}. What would you like to order?"
+
+    problems: list[str] = []
+    for result in results:
+        error = result.get("error")
+        if error:
+            problems.append(str(error))
+        for invalid in result.get("invalid_items", []):
+            if isinstance(invalid, dict):
+                problems.append(
+                    f"{invalid.get('item_name', 'That item')} was not added: {invalid.get('reason', 'it is unavailable.')}"
+                )
+
+    if cart_result is not None:
+        items = cart_result.get("items", cart_result.get("cart", []))
+        subtotal = float(cart_result.get("subtotal", 0.0))
+        if items:
+            lines = "; ".join(
+                f"{int(item['quantity'])} {item['name']} (${float(item.get('line_total', item.get('unit_price', 0) * item['quantity'])):.2f})"
+                for item in items
+            )
+            cart_text = f"Your current cart is: {lines}. Subtotal: ${subtotal:.2f}."
+        else:
+            cart_text = "Your cart is empty."
+        if problems:
+            response = " ".join(problems) + " " + cart_text
+            available = next((r.get("available_items") for r in results if r.get("available_items")), None)
+            if available:
+                response += " Available menu items: " + ", ".join(available) + "."
+            if items:
+                response += (
+                    " Would you like to add anything else? If everything is correct, "
+                    "say ‘Yes, place the order.’"
+                )
+            return response
+        return cart_text + " Would you like to add anything else or confirm the order?"
+
+    if problems:
+        available = next((r.get("available_items") for r in results if r.get("available_items")), None)
+        response = " ".join(problems)
+        if available:
+            response += " Available menu items: " + ", ".join(available) + "."
+        return response
+    return "I couldn't verify that request, so I made no change to your cart."
 
 
 async def wait_for_port(host: str, port: int, process: subprocess.Popen[Any] | None, timeout: float) -> None:
@@ -168,6 +393,12 @@ class BrowserSession:
         self.browser = browser
         self.options = options
         self.pending_calls: list[dict[str, Any]] = []
+        self.latest_user_text = ""
+        self.active_response_user_text = ""
+        self.buffer_order_response = False
+        self.buffered_assistant_text: list[str] = []
+        self.buffered_audio: list[str] = []
+        self.awaiting_order_confirmation = False
         self.latency_turn = 0
         self.speech_started_at: float | None = None
         self.speech_ended_at: float | None = None
@@ -198,6 +429,148 @@ class BrowserSession:
 
     async def send(self, payload: dict[str, Any]) -> None:
         await self.browser.send_json(payload)
+
+    def _note_user_text(self, text: str) -> None:
+        self.latest_user_text = text.strip()
+        if not _is_clear_yes(self.latest_user_text):
+            self.awaiting_order_confirmation = False
+
+    def _clear_response_buffer(self) -> None:
+        self.buffered_assistant_text.clear()
+        self.buffered_audio.clear()
+        self.buffer_order_response = False
+
+    async def _send_verified_response(self, text: str) -> None:
+        self.log_latency("verified_response", characters=len(text))
+        await self.send({"type": "verified_response", "text": text})
+
+    async def _finish_response_without_tools(self) -> None:
+        user_text = self.active_response_user_text
+        if not self.buffer_order_response:
+            await self.send({"type": "response_done", "status": "completed"})
+            return
+
+        if _MENU_REQUEST_RE.search(user_text):
+            result = await order_tools.execute_tool("show_menu", {})
+            await self.send({"type": "tool_result", "name": "show_menu", "result": result})
+            await self._send_verified_response(
+                format_verified_tool_response([{"name": "show_menu"}], [result])
+            )
+            return
+
+        if _is_clear_yes(user_text) and not _CONFIRMATION_QUESTION_RE.search(user_text):
+            if self.awaiting_order_confirmation and order_tools.PENDING_CONFIRMATION:
+                result = await order_tools.execute_tool(
+                    "create_mock_order", {"customer_confirmation": user_text}
+                )
+                self.awaiting_order_confirmation = False
+                await self.send({"type": "tool_result", "name": "create_mock_order", "result": result})
+                await self._send_verified_response(
+                    format_verified_tool_response(
+                        [{"name": "create_mock_order"}], [result]
+                    )
+                )
+            else:
+                result = await order_tools.execute_tool("get_cart", {})
+                await self.send({"type": "tool_result", "name": "get_cart", "result": result})
+                if result.get("items"):
+                    text = format_verified_tool_response(
+                        [{"name": "get_cart"}], [result], cart_result=result
+                    )
+                    text = text.replace(
+                        "Would you like to add anything else or confirm the order?",
+                        "Please review the order. If it is correct, say ‘Yes, place the order.’",
+                    )
+                    self.awaiting_order_confirmation = True
+                else:
+                    text = "Your cart is empty. Tell me what you would like to order."
+                    self.awaiting_order_confirmation = False
+                await self._send_verified_response(text)
+            return
+
+        if _CART_READ_RE.search(user_text):
+            result = await order_tools.execute_tool("get_cart", {})
+            await self.send({"type": "tool_result", "name": "get_cart", "result": result})
+            text = format_verified_tool_response(
+                [{"name": "get_cart"}], [result], cart_result=result
+            )
+            if result.get("items"):
+                text = text.replace(
+                    "Would you like to add anything else or confirm the order?",
+                    "Please review the order. If it is correct, say ‘Yes, place the order.’",
+                )
+                self.awaiting_order_confirmation = True
+            else:
+                self.awaiting_order_confirmation = False
+            await self._send_verified_response(text)
+            return
+
+        menu_names = ", ".join(item["name"] for item in order_tools.MENU)
+        await self._send_verified_response(
+            "I couldn't verify a cart action, so I haven't changed your order. "
+            f"Available menu items are {menu_names}. Please tell me what you would like."
+        )
+
+    async def _finish_tool_response(self, conn: Any, calls: list[dict[str, Any]]) -> None:
+        results: list[dict[str, Any]] = []
+        for call in calls:
+            tool_started_at = time.perf_counter()
+            if call["name"] == "create_mock_order" and not self.awaiting_order_confirmation:
+                result = {
+                    "error": "Order confirmation has not been requested by the app; no order was placed."
+                }
+            elif not tool_matches_user_intent(
+                call["name"], self.active_response_user_text, call["arguments"]
+            ):
+                result = {
+                    "error": "This tool call did not match the customer's latest request; no change was made."
+                }
+            else:
+                try:
+                    result = await order_tools.execute_tool(call["name"], call["arguments"])
+                except Exception as exc:
+                    result = {"error": f"{type(exc).__name__}: {exc}"}
+            self.log_latency(
+                "tool_complete",
+                name=call["name"],
+                duration=self.elapsed_ms(tool_started_at),
+            )
+            results.append(result)
+            await conn.send(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": call["call_id"],
+                        "output": json.dumps(result),
+                    },
+                }
+            )
+            await self.send({"type": "tool_result", "name": call["name"], "result": result})
+
+        cart_result = None
+        if any(
+            call["name"] in {
+                "add_to_cart", "remove_from_cart", "remove_item_from_cart",
+                "set_item_quantity", "replace_cart_item", "get_cart",
+            }
+            for call in calls
+        ):
+            cart_result = await order_tools.execute_tool("get_cart", {})
+            await self.send({"type": "tool_result", "name": "get_cart", "result": cart_result})
+        if cart_result and cart_result.get("items"):
+            self.awaiting_order_confirmation = True
+        else:
+            self.awaiting_order_confirmation = False
+        for call, result in zip(calls, results):
+            if call["name"] == "create_mock_order" and result.get("status") == "MOCK_ORDER_CREATED":
+                self.awaiting_order_confirmation = False
+        await self._send_verified_response(
+            format_verified_tool_response(calls, results, cart_result=cart_result).replace(
+                "Would you like to add anything else or confirm the order?",
+                "Would you like to add anything else? If everything is correct, say ‘Yes, place the order.’",
+            )
+        )
 
     async def run(self) -> None:
         order_tools.reset_state()
@@ -254,6 +627,7 @@ class BrowserSession:
                 text = str(message.get("text", "")).strip()
                 if not text:
                     continue
+                self._note_user_text(text)
                 await conn.send(
                     {
                         "type": "conversation.item.create",
@@ -318,6 +692,8 @@ class BrowserSession:
 
             if kind == "conversation.item.input_audio_transcription.completed":
                 text = getattr(event, "transcript", "") or ""
+                if text.strip():
+                    self._note_user_text(text)
                 if self.speech_ended_at is not None:
                     self.log_latency(
                         "transcription_complete",
@@ -326,6 +702,9 @@ class BrowserSession:
                 if text:
                     await self.send({"type": "user_transcript", "text": text})
             elif kind in {"response.output_audio_transcript.delta", "response.output_text.delta"}:
+                if self.buffer_order_response:
+                    self.buffered_assistant_text.append(event.delta)
+                    continue
                 if self.response_started_at is not None and not self.first_text_logged:
                     self.first_text_logged = True
                     self.log_latency(
@@ -335,9 +714,16 @@ class BrowserSession:
                 await self.send({"type": "assistant_delta", "text": event.delta})
             elif kind == "response.output_audio_transcript.done":
                 text = getattr(event, "transcript", "") or ""
+                if self.buffer_order_response:
+                    if text and not self.buffered_assistant_text:
+                        self.buffered_assistant_text.append(text)
+                    continue
                 if text:
                     await self.send({"type": "assistant_done", "text": text})
             elif kind == "response.output_audio.delta":
+                if self.buffer_order_response:
+                    self.buffered_audio.append(event.delta)
+                    continue
                 if self.response_started_at is not None and not self.first_audio_logged:
                     self.first_audio_logged = True
                     self.log_latency(
@@ -353,6 +739,10 @@ class BrowserSession:
             elif kind == "response.created":
                 self.response_cycle += 1
                 self.response_started_at = time.perf_counter()
+                self.active_response_user_text = self.latest_user_text
+                self.buffer_order_response = is_order_related_turn(self.active_response_user_text)
+                self.buffered_assistant_text.clear()
+                self.buffered_audio.clear()
                 self.first_text_logged = False
                 self.first_audio_logged = False
                 self.log_latency(
@@ -390,42 +780,27 @@ class BrowserSession:
                         duration=self.elapsed_ms(self.response_started_at),
                         status=status,
                     )
-                if self.pending_calls:
-                    for call in self.pending_calls:
-                        tool_started_at = time.perf_counter()
-                        try:
-                            result = await order_tools.execute_tool(call["name"], call["arguments"])
-                        except Exception as exc:
-                            result = {"error": f"{type(exc).__name__}: {exc}"}
-                        finally:
-                            self.log_latency(
-                                "tool_complete",
-                                name=call["name"],
-                                duration=self.elapsed_ms(tool_started_at),
-                            )
-                        await conn.send(
-                            {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "function_call_output",
-                                    "call_id": call["call_id"],
-                                    "output": json.dumps(result),
-                                },
-                            }
-                        )
-                        await self.send(
-                            {
-                                "type": "tool_result",
-                                "name": call["name"],
-                                "result": result,
-                            }
-                        )
-                    self.pending_calls.clear()
-                    await conn.send({"type": "response.create"})
+                calls = self.pending_calls
+                self.pending_calls = []
+                if status != "completed":
+                    # A cancelled response must never commit an unfinished order action.
+                    if self.buffer_order_response:
+                        await self.send({"type": "response_done", "status": status})
+                    else:
+                        for audio in self.buffered_audio:
+                            await self.send({"type": "audio", "audio": audio})
+                        await self.send({"type": "response_done", "status": status})
+                    self._clear_response_buffer()
+                    continue
+
+                if calls:
+                    await self._finish_tool_response(conn, calls)
                 else:
-                    await self.send({"type": "response_done", "status": status})
+                    await self._finish_response_without_tools()
+                self._clear_response_buffer()
             elif kind == "input_audio_buffer.speech_started":
                 self.latency_turn += 1
+                self.latest_user_text = ""
                 self.speech_started_at = time.perf_counter()
                 self.speech_ended_at = None
                 self.response_cycle = 0
