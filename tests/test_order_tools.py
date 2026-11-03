@@ -83,7 +83,7 @@ class MenuAndCartTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_item_and_quantity(self) -> None:
         result = await order_tools.execute_tool("add_to_cart", {"item_name": "Pizza", "quantity": 1})
-        self.assertIn("not on the sample menu", result["error"])
+        self.assertIn("not on this store's menu", result["error"])
         self.assertIn("Cheeseburger", result["available_items"])
 
         for quantity in (0, 21, -1, "two", 1.5, True):
@@ -166,6 +166,11 @@ class ConfirmationParserTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertTrue(order_tools._is_explicit_confirmation(text))
+
+    def test_rejects_confirmation_questions_as_authorization(self) -> None:
+        for text in ("Can you confirm the order?", "Could you place the order?", "Should I submit it?"):
+            with self.subTest(text=text):
+                self.assertFalse(order_tools._is_explicit_confirmation(text))
 
     def test_rejects_refusals_and_empty_values(self) -> None:
         for text in (

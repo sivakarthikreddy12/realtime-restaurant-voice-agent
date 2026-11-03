@@ -148,7 +148,7 @@ class RealtimeContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(session["audio"]["input"]["turn_detection"]["type"], "server_vad")
         browser_detection = build_browser_session_update(config)["session"]["audio"]["input"]["turn_detection"]
-        self.assertTrue(browser_detection["create_response"])
+        self.assertFalse(browser_detection["create_response"])
         self.assertEqual(browser_detection["silence_duration_ms"], 700)
         # At the pipeline's native 16 kHz the client omits an explicit format.
         self.assertNotIn("format", session["audio"]["input"])

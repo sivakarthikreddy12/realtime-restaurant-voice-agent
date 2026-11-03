@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Demo Burger House - Voice Ordering</title>
+  <title>Sanpeggio's Pizza - Voice Ordering Demo</title>
   <style>
     :root {
       --bg: #f6efe3;
@@ -210,7 +210,7 @@
       <div class="brand">
         <div class="logo">DB</div>
         <div>
-          <h1>Demo Burger House</h1>
+          <h1>Sanpeggio's Pizza</h1>
           <p>Realtime voice ordering demo</p>
         </div>
       </div>
@@ -256,6 +256,14 @@
   </div>
 
   <script>
+    const storeId = new URLSearchParams(location.search).get('store_id') || 'sanpeggios-demo';
+    const sessionStorageKey = `restaurantVoiceSessionId:${storeId}`;
+    let sessionId = sessionStorage.getItem(sessionStorageKey);
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      sessionStorage.setItem(sessionStorageKey, sessionId);
+    }
+
     const state = {
       ws: null,
       ready: false,
@@ -658,7 +666,7 @@
       setControlsEnabled(false);
       state.ready = false;
       setStatus("Connecting...", "thinking");
-      const ws = new WebSocket(`ws://${location.host}/ws`);
+      const ws = new WebSocket(`ws://${location.host}/ws?session_id=${encodeURIComponent(sessionId)}&store_id=${encodeURIComponent(storeId)}`);
       state.ws = ws;
 
       ws.onmessage = (event) => {
@@ -669,6 +677,9 @@
           return;
         }
         switch (message.type) {
+          case "cart_state":
+            renderCart(message.items, message.subtotal);
+            break;
           case "ready":
             state.ready = true;
             setControlsEnabled(true);
@@ -775,7 +786,10 @@
       send({ type: "mock_order" });
       setStatus("Creating mock receipt...", "thinking");
     });
-    newSessionBtn.addEventListener("click", () => window.location.reload());
+    newSessionBtn.addEventListener("click", () => {
+      sessionStorage.removeItem(sessionStorageKey);
+      window.location.reload();
+    });
 
     addSystem("Connecting to the local voice assistant...");
     connect();

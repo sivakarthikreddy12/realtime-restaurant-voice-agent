@@ -1,0 +1,961 @@
+{
+  "restaurant": "Sanpeggio's Pizza",
+  "source": "https://www.sanpeggiopizza.com/menu?menu=mainmenu",
+  "source_checked": "2026-11-02",
+  "currency": "USD",
+  "notes": [
+    "Snapshot parsed from the official Wix menu HTML using its data-hook attributes.",
+    "Prices omitted by the source remain null and are not inferred."
+  ],
+  "items": [
+    {
+      "name": "Build Your Own Pizza",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Choose Your Size",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Build Your Own Pizza - 7” Small",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": 8.49,
+      "size": "7” Small",
+      "aliases": [
+        "small pizza",
+        "7 inch pizza"
+      ],
+      "customizations": {
+        "crust": {
+          "choices": [
+            "New York Style",
+            "Thin & Crispy",
+            "Cauliflower Crust"
+          ],
+          "price_deltas": {
+            "Thin & Crispy": 2.0,
+            "Cauliflower Crust": 3.0
+          },
+          "size_limits": {
+            "Thin & Crispy": [
+              14,
+              16
+            ],
+            "Cauliflower Crust": [
+              12
+            ]
+          }
+        },
+        "toppings": {
+          "choices": [
+            "Pepperoni",
+            "Chicken",
+            "Black Olives",
+            "Green Peppers",
+            "Sun-Dried Tomatoes",
+            "Onions",
+            "Ham",
+            "Beef",
+            "Sausage",
+            "Mushrooms",
+            "Green Olives",
+            "Hot Peppers",
+            "Bacon",
+            "Meatballs",
+            "Pineapple",
+            "Spinach",
+            "Jalapeños",
+            "Banana Peppers"
+          ],
+          "price_by_size": {
+            "small": 1.5,
+            "medium": 1.75,
+            "large": 2.25,
+            "x-large": 2.75
+          }
+        }
+      },
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Build Your Own Pizza - 12” Medium",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": 12.49,
+      "size": "12” Medium",
+      "aliases": [
+        "medium pizza",
+        "12 inch pizza"
+      ],
+      "customizations": {
+        "crust": {
+          "choices": [
+            "New York Style",
+            "Thin & Crispy",
+            "Cauliflower Crust"
+          ],
+          "price_deltas": {
+            "Thin & Crispy": 2.0,
+            "Cauliflower Crust": 3.0
+          },
+          "size_limits": {
+            "Thin & Crispy": [
+              14,
+              16
+            ],
+            "Cauliflower Crust": [
+              12
+            ]
+          }
+        },
+        "toppings": {
+          "choices": [
+            "Pepperoni",
+            "Chicken",
+            "Black Olives",
+            "Green Peppers",
+            "Sun-Dried Tomatoes",
+            "Onions",
+            "Ham",
+            "Beef",
+            "Sausage",
+            "Mushrooms",
+            "Green Olives",
+            "Hot Peppers",
+            "Bacon",
+            "Meatballs",
+            "Pineapple",
+            "Spinach",
+            "Jalapeños",
+            "Banana Peppers"
+          ],
+          "price_by_size": {
+            "small": 1.5,
+            "medium": 1.75,
+            "large": 2.25,
+            "x-large": 2.75
+          }
+        }
+      },
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Build Your Own Pizza - 14” Large",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": 14.49,
+      "size": "14” Large",
+      "aliases": [
+        "large pizza",
+        "14 inch pizza"
+      ],
+      "customizations": {
+        "crust": {
+          "choices": [
+            "New York Style",
+            "Thin & Crispy",
+            "Cauliflower Crust"
+          ],
+          "price_deltas": {
+            "Thin & Crispy": 2.0,
+            "Cauliflower Crust": 3.0
+          },
+          "size_limits": {
+            "Thin & Crispy": [
+              14,
+              16
+            ],
+            "Cauliflower Crust": [
+              12
+            ]
+          }
+        },
+        "toppings": {
+          "choices": [
+            "Pepperoni",
+            "Chicken",
+            "Black Olives",
+            "Green Peppers",
+            "Sun-Dried Tomatoes",
+            "Onions",
+            "Ham",
+            "Beef",
+            "Sausage",
+            "Mushrooms",
+            "Green Olives",
+            "Hot Peppers",
+            "Bacon",
+            "Meatballs",
+            "Pineapple",
+            "Spinach",
+            "Jalapeños",
+            "Banana Peppers"
+          ],
+          "price_by_size": {
+            "small": 1.5,
+            "medium": 1.75,
+            "large": 2.25,
+            "x-large": 2.75
+          }
+        }
+      },
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Build Your Own Pizza - 16” X - Large",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": 16.49,
+      "size": "16” X",
+      "aliases": [
+        "extra large pizza",
+        "16 inch pizza"
+      ],
+      "customizations": {
+        "crust": {
+          "choices": [
+            "New York Style",
+            "Thin & Crispy",
+            "Cauliflower Crust"
+          ],
+          "price_deltas": {
+            "Thin & Crispy": 2.0,
+            "Cauliflower Crust": 3.0
+          },
+          "size_limits": {
+            "Thin & Crispy": [
+              14,
+              16
+            ],
+            "Cauliflower Crust": [
+              12
+            ]
+          }
+        },
+        "toppings": {
+          "choices": [
+            "Pepperoni",
+            "Chicken",
+            "Black Olives",
+            "Green Peppers",
+            "Sun-Dried Tomatoes",
+            "Onions",
+            "Ham",
+            "Beef",
+            "Sausage",
+            "Mushrooms",
+            "Green Olives",
+            "Hot Peppers",
+            "Bacon",
+            "Meatballs",
+            "Pineapple",
+            "Spinach",
+            "Jalapeños",
+            "Banana Peppers"
+          ],
+          "price_by_size": {
+            "small": 1.5,
+            "medium": 1.75,
+            "large": 2.25,
+            "x-large": 2.75
+          }
+        }
+      },
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Choose Your Crust",
+      "description": "-",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "New York Style",
+      "description": "",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Thin & Crispy",
+      "description": "Available in 14\" & 16\" for Additional $2",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "12” Cauliflower Crust",
+      "description": "Gluten-free 12\" only, Additional $3",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": "12” Cauliflower",
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Choose Your Toppings",
+      "description": "Small $1.50, Medium $1.75, Large $2.25, X-Large $2.75 Pepperoni | Chicken | Black Olives | Green Peppers | Sun-Dried Tomatoes | Onions | Ham | Beef | Sausage | Mushrooms | Green Olives | Hot Peppers | Bacon | Meatballs | Pineapple | Spinach | Jalapeños | Banana Peppers",
+      "category": "Homestyle Pizza",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "SPECIALTY & GOURMET",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet Pizza - 7” Small",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": 10.99,
+      "size": "7” Small",
+      "aliases": [
+        "small specialty pizza",
+        "small gourmet pizza"
+      ],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet Pizza - 12” Medium",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": 17.99,
+      "size": "12” Medium",
+      "aliases": [
+        "medium specialty pizza",
+        "medium gourmet pizza"
+      ],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet Pizza - 14” Large",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": 20.99,
+      "size": "14” Large",
+      "aliases": [
+        "large specialty pizza",
+        "large gourmet pizza"
+      ],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet Pizza - 16” X-Large",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": 23.99,
+      "size": "16” X-Large",
+      "aliases": [
+        "x-large specialty pizza",
+        "x-large gourmet pizza"
+      ],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet Pizza - 12” Cauliflower Crust",
+      "description": "",
+      "category": "Neighborhood Favorites",
+      "price": 20.99,
+      "size": "12” Cauliflower",
+      "aliases": [
+        "cauliflower crust specialty pizza",
+        "cauliflower crust gourmet pizza"
+      ],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "-",
+      "description": "Extra Cheese Small: $1.75 | Medium: $2.00 Large $2.50 | X-Large $3.00 Thin crust available in 14\" and 16\" for Additional $2.",
+      "category": "Neighborhood Favorites",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Chicken Tikka Masala",
+      "description": "Signature Tikka Masala Sauce, Tikka Masala Chicken, Red Onions, Jalapeños, and Arugula (Additional $2)",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Hawaiian Punch",
+      "description": "Melted Medley of Cheeses & Sauce Topped with Ham & Pineapple",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Fajita Fiesta",
+      "description": "Melted Medley of Cheeses & Sauce Topped with Fajita Chicken, Green Peppers & Onions",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Chef’s Meatballs",
+      "description": "Our Pizza Chef Dan’s Favorite with Meatballs, Spinach, Mushrooms & Red Onions",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "BBQ Chicken",
+      "description": "Barbecue Sauce, Cheese Medley & Chicken",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Buffalo Chicken",
+      "description": "Mild Buffalo Sauce, Cheese Medley & Chicken",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "White",
+      "description": "Alfredo Sauce, Cheese Medley & Garlic",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Spinach & Bacon Alfredo",
+      "description": "Alfredo Sauce, Cheese Medley, Bacon & Spinach",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Pesto",
+      "description": "Fresh Pesto Sauce, Sun-Dried Tomatoes Topped with Cheese Medley",
+      "category": "Gourmet Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Mr. Meaty",
+      "description": "Pepperoni, Ham, Bacon, Beef & Sausage",
+      "category": "Specialty Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Supreme",
+      "description": "Pepperoni, Beef & Sausage, Mushrooms, Green Peppers & Onion",
+      "category": "Specialty Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Very Veggie",
+      "description": "Mushroom, Onions, Green Peppers, Black Olives & Tomatoes",
+      "category": "Specialty Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Super-Duper Supreme",
+      "description": "Pepperoni, Mushrooms, Green Peppers, Onions, Beef, Sausage, Black Olives, Bacon, Ham & Pineapple (Additional $1)",
+      "category": "Specialty Pizzas",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Ziti",
+      "description": "",
+      "category": "Pastas",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Lasagna",
+      "description": "",
+      "category": "Pastas",
+      "price": 11.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Fettuccine Alfredo",
+      "description": "",
+      "category": "Pastas",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Spaghetti",
+      "description": "",
+      "category": "Pastas",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Kid’s Spaghetti",
+      "description": "Add meat to your pasta: Meatball $3.99 | Chicken $4.49",
+      "category": "Pastas",
+      "price": 6.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Veggie Calzone",
+      "description": "",
+      "category": "Calzones",
+      "price": 9.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Super Supreme Calzone",
+      "description": "",
+      "category": "Calzones",
+      "price": 11.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Specialty/Gourmet",
+      "description": "",
+      "category": "Calzones",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Tossed Salad",
+      "description": "",
+      "category": "Salads",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Greek Salad",
+      "description": "",
+      "category": "Salads",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "-",
+      "description": "Add meat to your salad: Chicken small: $2.49 | Chicken large: $2.99 Dressing: Ranch, Greek | Extra Dressing $0.75 Extra Feta: Small $1.00 | Large $1.75",
+      "category": "Salads",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Veggie",
+      "description": "",
+      "category": "Subs",
+      "price": 8.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Italian",
+      "description": "",
+      "category": "Subs",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Chicken",
+      "description": "",
+      "category": "Subs",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Ham & Cheese",
+      "description": "",
+      "category": "Subs",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Meat Ball Sub",
+      "description": "",
+      "category": "Subs",
+      "price": 10.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "-",
+      "description": "Extra Cheese $2.00",
+      "category": "Subs",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Traditional Wings",
+      "description": "",
+      "category": "Wings",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Boneless Wings",
+      "description": "",
+      "category": "Wings",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "-",
+      "description": "Pick your flavour: Mild Buffalo/Hot Buffalo/Parmesan Garlic /Lemon Pepper/Mango Habanero Additional Ranch Dip: $0.75",
+      "category": "Wings",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Cheese Bread",
+      "description": "",
+      "category": "Breads",
+      "price": null,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Breadsticks",
+      "description": "",
+      "category": "Breads",
+      "price": 6.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Tiramisu",
+      "description": "",
+      "category": "Desserts",
+      "price": 6.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Limoncello Mascarpone Cake",
+      "description": "",
+      "category": "Desserts",
+      "price": 6.99,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "8\" Chocolate Chip Cookie",
+      "description": "",
+      "category": "Desserts",
+      "price": 10.99,
+      "size": "8\" Chocolate",
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Ranch (2 oz)",
+      "description": "",
+      "category": "Extras",
+      "price": 0.75,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Marinara (2 oz)",
+      "description": "",
+      "category": "Extras",
+      "price": 0.75,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Alfredo (2 oz)",
+      "description": "",
+      "category": "Extras",
+      "price": 0.75,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Greek Vinaigrette (2 oz)",
+      "description": "",
+      "category": "Extras",
+      "price": 0.75,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Garlic Butter (2 oz)",
+      "description": "",
+      "category": "Extras",
+      "price": 0.75,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Garlic Bread",
+      "description": "",
+      "category": "Extras",
+      "price": 1.0,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "20oz drinks",
+      "description": "Coca-Cola, Diet Coke, Dasani Water, Pibb Extra, Sprite, Coca-Cola Zero Sugar, Minute Maid Lemonade",
+      "category": "Beverages",
+      "price": 3.29,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Gold Peak Extra",
+      "description": "Sweet Tea, 18.5oz",
+      "category": "Beverages",
+      "price": 3.29,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "2 Litres Soda",
+      "description": "Coca-Cola, Diet Coke, Dasani Water, Pibb Extra, Sprite, Coca-Cola Zero Sugar, Minute Maid Lemonade",
+      "category": "Beverages",
+      "price": 4.79,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    },
+    {
+      "name": "Fountain Drinks 16oz",
+      "description": "*At Select Locations",
+      "category": "Beverages",
+      "price": 3.49,
+      "size": null,
+      "aliases": [],
+      "customizations": {},
+      "available": true,
+      "source_url": "https://www.sanpeggiopizza.com/menu?menu=mainmenu"
+    }
+  ]
+}

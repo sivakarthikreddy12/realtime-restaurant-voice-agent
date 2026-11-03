@@ -70,6 +70,7 @@ class WebUILauncherTests(unittest.TestCase):
             'case "response_started":',
             "type: \"audio\"",
             "type: \"text\"",
+            "sessionStorage.getItem",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, html)
@@ -80,6 +81,7 @@ class WebUILauncherTests(unittest.TestCase):
         self.assertIn("/", paths)
         self.assertIn("/ws", paths)
         self.assertIn("/healthz", paths)
+        self.assertIn("/menu/sync", paths)
 
     def test_prompt_requires_mock_order_tool(self) -> None:
         self.assertIn("MUST call", ui_server.DEFAULT_INSTRUCTIONS)

@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 import webbrowser
 from contextlib import asynccontextmanager
 from typing import Any,cast
@@ -53,7 +54,7 @@ UI_INDEX = PROJECT_ROOT / "ui" / "index.html"
 LATENCY_LOG = PROJECT_ROOT / "latency.log"
 DEFAULT_UI_PORT = 8000
 DEFAULT_S2S_PORT = 8765
-SILENCE_SECONDS = 1.2
+SILENCE_SECONDS = 0.75
 PCM_CHUNK_BYTES = 2048
 
 
@@ -73,12 +74,21 @@ def build_browser_session_update(
     turn_detection = session_update["session"]["audio"]["input"]["turn_detection"]
     turn_detection.update(
         {
-            "create_response": True,
+            "create_response": False,
             "silence_duration_ms": 700,
         }
     )
 
     return session_update
+
+
+def build_response_create(user_text: str) -> dict[str, Any]:
+    """Require a function call before answering menu/cart/order requests."""
+
+    response: dict[str, Any] = {}
+    if order_tools.message_requires_tool(user_text):
+        response["tool_choice"] = "required"
+    return {"type": "response.create", "response": response}
 
 
 async def wait_for_port(host: str, port: int, process: subprocess.Popen[Any] | None, timeout: float) -> None:
@@ -116,7 +126,9 @@ def build_serve_argv(options: argparse.Namespace) -> list[str]:
                 "--stt",
                 "mlx-audio-whisper",
                 "--mlx_audio_whisper_model_name",
-                "mlx-community/whisper-base-mlx",
+                "mlx-community/whisper-small-mlx",
+                "--language",
+                "en",
                 "--model_name",
                 "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
                 "--qwen3_tts_model_name",
@@ -167,6 +179,9 @@ class BrowserSession:
     def __init__(self, browser: WebSocket, options: argparse.Namespace) -> None:
         self.browser = browser
         self.options = options
+        self.session_id = str(uuid.uuid4())
+        self.store_id = "sanpeggios-demo"
+        self.current_user_text: str | None = None
         self.pending_calls: list[dict[str, Any]] = []
         self.latency_turn = 0
         self.speech_started_at: float | None = None
@@ -200,7 +215,18 @@ class BrowserSession:
         await self.browser.send_json(payload)
 
     async def run(self) -> None:
-        order_tools.reset_state()
+        requested_session_id = self.browser.query_params.get("session_id")
+        if requested_session_id:
+            try:
+                self.session_id = str(uuid.UUID(requested_session_id))
+            except ValueError:
+                pass
+        self.store_id = self.browser.query_params.get("store_id", "sanpeggios-demo")[:80]
+        await order_tools.ensure_persisted_session(self.session_id, self.store_id)
+        with order_tools.use_session(self.session_id, self.store_id), order_tools.use_latency_callback(self.log_latency):
+            await self.run_session()
+
+    async def run_session(self) -> None:
         tools, executor, create_response = load_realtime_tool_module("order_tools")
         config = RealtimeAudioClientConfig(
             tools=tools,
@@ -223,7 +249,30 @@ class BrowserSession:
                     event = await asyncio.wait_for(conn.recv(), timeout=30)
                     if event.type == "session.updated":
                         break
+                await order_tools.require_fresh_cart_review(self.session_id)
+                cart, subtotal = await order_tools.get_session_cart_snapshot(self.session_id)
+                await self.send({"type": "cart_state", "items": cart, "subtotal": subtotal})
                 await self.send({"type": "ready"})
+                welcome = await order_tools.session_welcome(self.session_id, self.store_id)
+                if welcome:
+                    # The local speech-to-speech model needs a user message in
+                    # its context, even when it is generating the opening line.
+                    # This internal cue is not shown as a customer transcript.
+                    await conn.send({
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{
+                                "type": "input_text",
+                                "text": f"Start the conversation by saying this welcome message exactly: {welcome}",
+                            }],
+                        },
+                    })
+                    await conn.send({
+                        "type": "response.create",
+                        "response": {"instructions": f"Say this welcome message exactly, then wait for the customer: {welcome}", "tool_choice": "none"},
+                    })
 
                 browser_task = asyncio.create_task(self.pump_browser(conn))
                 realtime_task = asyncio.create_task(self.pump_realtime(conn))
@@ -254,6 +303,8 @@ class BrowserSession:
                 text = str(message.get("text", "")).strip()
                 if not text:
                     continue
+                self.current_user_text = text
+                await order_tools.invalidate_review_for_message(text)
                 await conn.send(
                     {
                         "type": "conversation.item.create",
@@ -264,7 +315,7 @@ class BrowserSession:
                         },
                     }
                 )
-                await conn.send({"type": "response.create"})
+                await conn.send(build_response_create(text))
                 await self.send({"type": "thinking"})
             elif kind == "audio":
                 audio = message.get("audio")
@@ -324,7 +375,14 @@ class BrowserSession:
                         after_speech_end=self.elapsed_ms(self.speech_ended_at),
                     )
                 if text:
+                    self.current_user_text = text
+                    await order_tools.invalidate_review_for_message(text)
                     await self.send({"type": "user_transcript", "text": text})
+                    await conn.send(build_response_create(text))
+                else:
+                    self.log_latency("empty_transcription_ignored")
+                    await self.send({"type": "notice", "text": "I didn't catch that. Please try saying it again."})
+                    await self.send({"type": "response_done", "status": "no_transcript"})
             elif kind in {"response.output_audio_transcript.delta", "response.output_text.delta"}:
                 if self.response_started_at is not None and not self.first_text_logged:
                     self.first_text_logged = True
@@ -372,6 +430,7 @@ class BrowserSession:
                     "name": event.name,
                     "arguments": arguments,
                     "call_id": event.call_id,
+                    "user_message": self.current_user_text,
                 }
                 self.pending_calls.append(call)
                 await self.send(
@@ -394,7 +453,8 @@ class BrowserSession:
                     for call in self.pending_calls:
                         tool_started_at = time.perf_counter()
                         try:
-                            result = await order_tools.execute_tool(call["name"], call["arguments"])
+                            with order_tools.use_user_message(call["user_message"]):
+                                result = await order_tools.execute_tool(call["name"], call["arguments"])
                         except Exception as exc:
                             result = {"error": f"{type(exc).__name__}: {exc}"}
                         finally:
@@ -426,6 +486,7 @@ class BrowserSession:
                     await self.send({"type": "response_done", "status": status})
             elif kind == "input_audio_buffer.speech_started":
                 self.latency_turn += 1
+                self.current_user_text = ""
                 self.speech_started_at = time.perf_counter()
                 self.speech_ended_at = None
                 self.response_cycle = 0
@@ -453,10 +514,19 @@ async def lifespan(app: FastAPI):
     configure_ssl_trust()
     ensure_nltk_data()
     validate_tool_module("order_tools")
+    import postgres_store
 
-    process = start_voice_backend(options)
-    app.state.s2s_process = process
+    await postgres_store.open_store(order_tools.MENU)
+    if postgres_store.is_open():
+        import menu_sync
+        result = await menu_sync.sync_store()
+        if result.get("status") == "success":
+            order_tools._STORE_MENU_CACHE.pop("sanpeggios-demo", None)
+
+    process = None
     try:
+        process = start_voice_backend(options)
+        app.state.s2s_process = process
         if options.no_start:
             await wait_for_port("127.0.0.1", options.s2s_port, None, 1.0)
         else:
@@ -464,10 +534,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         stop_voice_backend(process)
+        await postgres_store.close_store()
 
 
-app = FastAPI(title="Demo Burger House Voice UI", lifespan=lifespan)
-app.state.session_lock = asyncio.Lock()
+app = FastAPI(title="Sanpeggio's Pizza Voice Ordering Demo", lifespan=lifespan)
 
 
 @app.get("/")
@@ -487,20 +557,18 @@ async def healthz() -> JSONResponse:
     )
 
 
+@app.post("/menu/sync")
+async def sync_menu(store_id: str = "sanpeggios-demo") -> JSONResponse:
+    import menu_sync
+    result = await menu_sync.sync_store(store_id)
+    order_tools._STORE_MENU_CACHE.pop(store_id, None)
+    return JSONResponse(result, status_code=200 if result.get("status") == "success" else 502)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
-    if app.state.session_lock.locked():
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": "Another browser session is active. Close the other tab or reload this page.",
-            }
-        )
-        await websocket.close()
-        return
-    async with app.state.session_lock:
-        await BrowserSession(websocket, app.state.options).run()
+    await BrowserSession(websocket, app.state.options).run()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
