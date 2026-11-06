@@ -1,0 +1,4 @@
+# Windows CPU profile: keeps the base environment and adds only its optional backends.
+-r requirements.txt
+faster-whisper>=1.0.3
+kokoro>=0.9.2

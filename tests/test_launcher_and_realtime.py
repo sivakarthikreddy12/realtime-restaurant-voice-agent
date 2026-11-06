@@ -34,9 +34,15 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("--port", argv)
 
     def test_mac_optimal_flag_only_on_apple_silicon(self) -> None:
-        with patch.object(launcher, "_on_apple_silicon", return_value=True):
+        with (
+            patch.object(launcher, "resolve_platform", return_value="macos-apple-silicon"),
+            patch.object(launcher, "_on_apple_silicon", return_value=True),
+        ):
             self.assertIn("--mac-optimal-settings", launcher.build_s2s_argv(launcher.LauncherOptions()))
-        with patch.object(launcher, "_on_apple_silicon", return_value=False):
+        with (
+            patch.object(launcher, "resolve_platform", return_value="macos-apple-silicon"),
+            patch.object(launcher, "_on_apple_silicon", return_value=False),
+        ):
             self.assertNotIn(
                 "--mac-optimal-settings", launcher.build_s2s_argv(launcher.LauncherOptions())
             )
@@ -50,6 +56,15 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(options.extra_args, ["--verbose", "--local_audio_print_json"])
         argv = launcher.build_s2s_argv(options)
         self.assertEqual(argv[-2:], ["--verbose", "--local_audio_print_json"])
+
+    def test_windows_profile_selects_cpu_models(self) -> None:
+        with patch.object(launcher, "resolve_platform", return_value="windows-cpu"):
+            argv = launcher.build_s2s_argv(launcher.LauncherOptions())
+        self.assertEqual(argv[argv.index("--stt") + 1], "faster-whisper")
+        self.assertEqual(argv[argv.index("--faster_whisper_stt_compute_type") + 1], "int8")
+        self.assertEqual(argv[argv.index("--model_name") + 1], "Qwen/Qwen2.5-1.5B-Instruct")
+        self.assertEqual(argv[argv.index("--tts") + 1], "kokoro")
+        self.assertNotIn("mlx-audio-whisper", argv)
 
     def test_ssl_fallback_uses_certifi_with_verification_enabled(self) -> None:
         broken = {

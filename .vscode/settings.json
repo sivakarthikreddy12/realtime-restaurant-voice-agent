@@ -5,5 +5,7 @@
             "envManager": "ms-python.python:venv",
             "packageManager": "ms-python.python:pip"
         }
-    ]
+    ],
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv_new\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true
 }

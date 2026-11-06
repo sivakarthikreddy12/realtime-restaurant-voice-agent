@@ -25,14 +25,18 @@ import sys
 import time
 import uuid
 import webbrowser
-from contextlib import asynccontextmanager
-from typing import Any,cast
+from contextlib import asynccontextmanager, suppress
+from typing import Any, cast
 
 import uvicorn
 import certifi
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from openai import AsyncOpenAI
+
+from config.model_config import get_model_profile
+from config.platform_config import resolve_platform
+from memory_monitor import log_memory_snapshot, memory_response
 
 import order_tools
 from main import (
@@ -56,6 +60,28 @@ DEFAULT_UI_PORT = 8000
 DEFAULT_S2S_PORT = 8765
 SILENCE_SECONDS = 0.75
 PCM_CHUNK_BYTES = 2048
+
+
+def load_local_env(path: Path | None = None) -> None:
+    """Load simple KEY=VALUE settings from the project .env without overriding the shell."""
+    env_path = path or PROJECT_ROOT / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        if not separator or not key.strip():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 def port_open(host: str, port: int, timeout: float = 0.25) -> bool:
@@ -106,10 +132,33 @@ async def wait_for_port(host: str, port: int, process: subprocess.Popen[Any] | N
     raise RuntimeError(f"Voice backend did not start on {host}:{port} within {timeout:.0f}s.")
 
 
-def build_serve_argv(options: argparse.Namespace) -> list[str]:
+def build_serve_argv(
+    options: argparse.Namespace,
+    *,
+    system: str | None = None,
+    machine: str | None = None,
+) -> list[str]:
     argv = ["serve"]
-    if options.mac_optimal and _on_apple_silicon():
+    profile_name = resolve_platform(options.profile, system=system, machine=machine)
+    if options.mac_optimal and profile_name == "macos-apple-silicon" and _on_apple_silicon():
         argv.append("--mac-optimal-settings")
+    if profile_name == "windows-cpu":
+        argv.extend(get_model_profile(profile_name).cli_args())
+    elif profile_name == "macos-apple-silicon" and options.small_models:
+        argv.extend(
+            [
+                "--stt",
+                "mlx-audio-whisper",
+                "--mlx_audio_whisper_model_name",
+                "mlx-community/whisper-base-mlx",
+                "--model_name",
+                "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+                "--qwen3_tts_model_name",
+                "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit",
+            ]
+        )
+    elif options.small_models:
+        raise ValueError("--small-models is available for the Windows CPU or Apple Silicon profiles.")
     argv.extend(
         [
             "--port",
@@ -155,7 +204,9 @@ def start_voice_backend(options: argparse.Namespace) -> subprocess.Popen[Any] | 
     env["SSL_CERT_FILE"] = ca_bundle
     env["REQUESTS_CA_BUNDLE"] = ca_bundle
     env["CURL_CA_BUNDLE"] = ca_bundle
-    command = [sys.executable, "-m", "speech_to_speech.cli", *build_serve_argv(options)]
+    profile_name = resolve_platform(options.profile)
+    env["RESTAURANT_VOICE_PROFILE"] = profile_name
+    command = [sys.executable, "-m", "backend_launcher", *build_serve_argv(options)]
     print("Starting voice backend:")
     print("  " + " ".join(command), flush=True)
     return subprocess.Popen(command, cwd=str(PROJECT_ROOT), env=env)
@@ -514,6 +565,7 @@ async def lifespan(app: FastAPI):
     configure_ssl_trust()
     ensure_nltk_data()
     validate_tool_module("order_tools")
+    load_local_env()
     import postgres_store
 
     await postgres_store.open_store(order_tools.MENU)
@@ -524,17 +576,31 @@ async def lifespan(app: FastAPI):
             order_tools._STORE_MENU_CACHE.pop("sanpeggios-demo", None)
 
     process = None
+    monitor_task: asyncio.Task[None] | None = None
     try:
+        log_memory_snapshot("ui_ready", os.getpid())
         process = start_voice_backend(options)
         app.state.s2s_process = process
+        monitor_task = asyncio.create_task(monitor_memory())
         if options.no_start:
             await wait_for_port("127.0.0.1", options.s2s_port, None, 1.0)
         else:
             await wait_for_port("127.0.0.1", options.s2s_port, process, options.startup_timeout)
+        log_memory_snapshot("backend_ready", os.getpid())
         yield
     finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor_task
         stop_voice_backend(process)
         await postgres_store.close_store()
+
+
+async def monitor_memory(interval_seconds: float = 15.0) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        log_memory_snapshot("runtime", os.getpid())
 
 
 app = FastAPI(title="Sanpeggio's Pizza Voice Ordering Demo", lifespan=lifespan)
@@ -563,6 +629,9 @@ async def sync_menu(store_id: str = "sanpeggios-demo") -> JSONResponse:
     result = await menu_sync.sync_store(store_id)
     order_tools._STORE_MENU_CACHE.pop(store_id, None)
     return JSONResponse(result, status_code=200 if result.get("status") == "success" else 502)
+@app.get("/memoryz")
+async def memoryz() -> JSONResponse:
+    return JSONResponse(memory_response(os.getpid()))
 
 
 @app.websocket("/ws")
@@ -583,7 +652,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--small-models",
         action="store_true",
-        help="Use the smaller Whisper/Qwen2.5/Qwen3-TTS model set for a fast local demo.",
+        help="Use the platform's compact profile (Windows CPU or the existing Apple Silicon model set).",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("auto", "windows-cpu", "macos-apple-silicon", "framework-defaults"),
+        default="auto",
+        help="Runtime/model profile. Auto selects Windows CPU or Apple Silicon settings by platform.",
     )
     parser.add_argument("--no-start", action="store_true", help="Connect to an already-running Realtime server.")
     parser.add_argument("--no-open", action="store_true", help="Do not open the browser automatically.")

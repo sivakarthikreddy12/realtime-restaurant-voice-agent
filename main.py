@@ -34,6 +34,9 @@ from importlib import import_module, metadata
 from pathlib import Path
 from typing import Any
 
+from config.model_config import get_model_profile
+from config.platform_config import detect_platform, resolve_platform
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 NLTK_DATA_DIR = PROJECT_ROOT / ".nltk_data"
 DEFAULT_TOOL_MODULE = "order_tools"
@@ -48,6 +51,7 @@ DEFAULT_INSTRUCTIONS = (
         "for menu items, prices, quantities, cart contents, and order status. Never narrate an action "
         "as completed before the corresponding tool succeeds. If you did not call a tool, say that the "
         "cart was not changed. If a tool returns an error, explain the error and leave the cart unchanged. "
+        "Never claim an item was added, removed, changed, or replaced unless the matching tool result confirms that exact change. "
         "Use show_menu for all menu questions. When describing the menu, use only the exact section, "
         "item, option, and price data returned by show_menu. Never add generic categories, sample "
         "items, or examples from memory. If the full menu is long, give the actual section names and "
@@ -90,11 +94,12 @@ class LauncherOptions:
     check: bool = False
     mic_test: bool = False
     speaker_test: bool = False
+    profile: str = "auto"
     extra_args: list[str] = field(default_factory=list)
 
 
 def _on_apple_silicon() -> bool:
-    return platform.system() == "Darwin" and platform.machine() == "arm64"
+    return detect_platform().is_apple_silicon
 
 
 
@@ -331,8 +336,14 @@ def build_s2s_argv(options: LauncherOptions) -> list[str]:
     """Build the ``speech-to-speech local`` argument list."""
 
     argv = ["local"]
-    if options.mac_optimal and _on_apple_silicon():
+    profile_name = resolve_platform(options.profile)
+    if (
+        options.mac_optimal
+        and profile_name in {"macos-apple-silicon", "framework-defaults"}
+        and _on_apple_silicon()
+    ):
         argv.append("--mac-optimal-settings")
+    argv.extend(get_model_profile(profile_name).cli_args())
     argv.extend(
         [
             "--tool-module",
@@ -371,6 +382,10 @@ def run_local(options: LauncherOptions) -> None:
         ) from exc
 
     validate_tool_module(options.tool_module)
+    from warmup_compat import install_framework_compatibility
+
+    profile_name = resolve_platform(options.profile)
+    install_framework_compatibility(windows_cpu=profile_name == "windows-cpu")
     argv = build_s2s_argv(options)
     if "-h" not in argv and "--help" not in argv:
         print("Starting realtime restaurant voice assistant (English).", flush=True)
@@ -412,6 +427,12 @@ def parse_args(argv: list[str] | None = None) -> LauncherOptions:
     parser.add_argument("--mic-test", action="store_true", help="Record 1 second and print the signal level.")
     parser.add_argument("--speaker-test", action="store_true", help="Play a short test tone.")
     parser.add_argument(
+        "--profile",
+        choices=("auto", "windows-cpu", "macos-apple-silicon", "framework-defaults"),
+        default="auto",
+        help="Runtime/model profile. Auto selects Windows CPU or Apple Silicon settings by platform.",
+    )
+    parser.add_argument(
         "extra_args",
         nargs=argparse.REMAINDER,
         help="Extra arguments for `speech-to-speech local`; put them after `--`.",
@@ -434,6 +455,7 @@ def parse_args(argv: list[str] | None = None) -> LauncherOptions:
         check=namespace.check,
         mic_test=namespace.mic_test,
         speaker_test=namespace.speaker_test,
+        profile=namespace.profile,
         extra_args=extra,
     )
 
@@ -463,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
 
         run_local(options)
         return 0
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         print(f"Setup error: {exc}", file=sys.stderr)
         return 1
 

@@ -18,6 +18,20 @@ python main.py --check
 python ui_server.py
 ```
 
+On Windows, use the CPU profile and dedicated environment:
+
+```powershell
+docker compose up -d postgres
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+.\.venv_new\Scripts\Activate.ps1
+python -m pip install -r requirements-windows.txt
+python main.py --check
+python ui_server.py
+```
+
+The UI loads `.env` from the project folder before opening PostgreSQL. Existing
+PowerShell environment variables take precedence over values in `.env`.
+
 Open the URL printed by the server (normally `http://127.0.0.1:8000`). `Ctrl+C`
 stops the UI and the voice backend it started. The first voice launch downloads
 the selected models; use `python ui_server.py --small-models` for a smaller

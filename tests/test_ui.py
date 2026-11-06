@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import os
 import sys
 import tempfile
 import unittest
@@ -19,11 +20,24 @@ import ui_server  # noqa: E402
 
 
 class WebUILauncherTests(unittest.TestCase):
+    def test_local_env_loads_database_settings_without_overriding_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "# comment\nDATABASE_URL=postgresql://local/db\nexport SESSION_TTL_SECONDS='3600'\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"DATABASE_URL": "postgresql://shell/db"}, clear=False):
+                ui_server.load_local_env(env_file)
+                self.assertEqual(os.environ["DATABASE_URL"], "postgresql://shell/db")
+                self.assertEqual(os.environ["SESSION_TTL_SECONDS"], "3600")
+
     def test_serve_argv_has_english_and_small_model_overrides(self) -> None:
         options = ui_server.parse_args(
             ["--small-models", "--s2s-port", "9001", "--", "--log_level", "warning"]
         )
-        argv = ui_server.build_serve_argv(options)
+        with patch.object(ui_server, "_on_apple_silicon", return_value=True):
+            argv = ui_server.build_serve_argv(options, system="Darwin", machine="arm64")
         self.assertEqual(argv[0], "serve")
         self.assertIn("--port", argv)
         self.assertEqual(argv[argv.index("--port") + 1], "9001")
@@ -82,6 +96,7 @@ class WebUILauncherTests(unittest.TestCase):
         self.assertIn("/ws", paths)
         self.assertIn("/healthz", paths)
         self.assertIn("/menu/sync", paths)
+        self.assertIn("/memoryz", paths)
 
     def test_prompt_requires_mock_order_tool(self) -> None:
         self.assertIn("MUST call", ui_server.DEFAULT_INSTRUCTIONS)
