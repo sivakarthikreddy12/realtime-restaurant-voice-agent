@@ -1,8 +1,8 @@
 # Realtime Restaurant Voice Agent
 
-A local English voice-ordering demo built on Hugging Face `speech-to-speech`.
-Audio flows through VAD → STT → LLM → tools → TTS. The browser UI is served by
-FastAPI and bridges the local Realtime backend over WebSockets.
+A local English voice-ordering demo using Groq Cloud for speech recognition,
+order parsing, and speech synthesis. The browser UI is served by FastAPI and
+keeps its cart and mock order workflow local to the app.
 
 This remains a demo: it never contacts Toast or places a real restaurant order.
 Confirmed orders are marked as mock orders and stored locally in PostgreSQL when
@@ -14,37 +14,37 @@ configured. Without PostgreSQL, the pre-existing sample menu remains the fallbac
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python main.py --check
+cp -n .env.example .env
+# Edit .env and set GROQ_API_KEY to your key from Groq Console.
 python ui_server.py
 ```
 
-On Windows, use the CPU profile and dedicated environment:
+On Windows, use PowerShell:
 
 ```powershell
-docker compose up -d postgres
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-.\.venv_new\Scripts\Activate.ps1
-python -m pip install -r requirements-windows.txt
-python main.py --check
+# Edit .env and set GROQ_API_KEY, then:
 python ui_server.py
 ```
 
-The UI loads `.env` from the project folder before opening PostgreSQL. Existing
-PowerShell environment variables take precedence over values in `.env`.
-
-Open the URL printed by the server (normally `http://127.0.0.1:8000`). `Ctrl+C`
-stops the UI and the voice backend it started. The first voice launch downloads
-the selected models; use `python ui_server.py --small-models` for a smaller
-local model set. That preset uses Whisper Small MLX for English transcription.
-Headphones help avoid microphone echo.
+Open the URL printed by the server (normally `http://127.0.0.1:8000`). The app
+loads `GROQ_API_KEY` from `.env`; `.env` is gitignored. Never commit or share it.
+It uses `whisper-large-v3-turbo` for transcription, `openai/gpt-oss-120b` for
+strict JSON Schema order parsing, and `canopylabs/orpheus-v1-english` with the
+`troy` voice for WAV speech output. Long replies are split into requests of at
+most 200 characters and WAV chunks are joined before playback. Headphones help
+avoid microphone echo.
 
 ## PostgreSQL and menu sync
 
-Start PostgreSQL with Docker, then configure the connection:
+Start PostgreSQL with Docker, then configure the database connection. Preserve
+the Groq key when editing `.env`:
 
 ```bash
 docker compose up -d postgres
-cp .env.example .env
 export DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' .env)"
 export SESSION_TTL_SECONDS="$(sed -n 's/^SESSION_TTL_SECONDS=//p' .env)"
 python ui_server.py
@@ -114,25 +114,19 @@ The new-call welcome is configurable in `restaurant_stores.welcome_message`
 and is played once for a new in-memory session. The default Sanpeggio's message
 is seeded on first database setup.
 
-## Latency and diagnostics
+## Troubleshooting
 
-The WebSocket bridge writes `[LATENCY]` entries to its terminal and
-`latency.log` for speech start/end, transcription completion, response start,
-first text, first audio, response completion, tool completion, and database
-menu/order operations. Browser `audio_end` currently appends 750 ms of silence
-to trigger the configured 700 ms VAD pause (previously 1.2 seconds). The voice
-library's model loading, LLM first-token generation, and audio device buffering
-remain the main machine-dependent bottlenecks. A trustworthy before/after
-end-to-end benchmark requires running the same cached models and hardware; no
-baseline trace is included in this repository.
+The app reports missing keys, transcription/parsing failures, and speech
+generation failures in the chat. Check that `.env` contains a valid
+`GROQ_API_KEY`, then restart `ui_server.py`. Network errors and Groq API errors
+are shown in the app. If the error says `model_terms_required`, an organization
+admin must accept the Orpheus model terms in Groq Console before speech can be
+generated. Text replies remain available if TTS fails.
 
 Useful options:
 
 ```bash
-python main.py --check
-python ui_server.py --small-models
-python ui_server.py --s2s-port 8766 --ui-port 8001
-tail -f latency.log
+python ui_server.py --ui-port 8001
 ```
 
 ## Tests
@@ -143,8 +137,8 @@ python -m unittest discover -s tests -v
 python -m pytest -q
 ```
 
-`unittest` covers the launcher and Realtime contract plus the new menu and
-session cases. `pytest` also collects the async batch/cart and graph tests.
+`unittest` covers the menu and session cases. `pytest` also collects the async
+batch/cart and graph tests.
 PostgreSQL integration tests require a running local database; the unit suites
 do not create or reset one.
 

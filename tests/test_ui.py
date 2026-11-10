@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import socket
-import os
 import sys
-import tempfile
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -20,51 +14,12 @@ import ui_server  # noqa: E402
 
 
 class WebUILauncherTests(unittest.TestCase):
-    def test_local_env_loads_database_settings_without_overriding_shell(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            env_file = Path(directory) / ".env"
-            env_file.write_text(
-                "# comment\nDATABASE_URL=postgresql://local/db\nexport SESSION_TTL_SECONDS='3600'\n",
-                encoding="utf-8",
-            )
-            with patch.dict("os.environ", {"DATABASE_URL": "postgresql://shell/db"}, clear=False):
-                ui_server.load_local_env(env_file)
-                self.assertEqual(os.environ["DATABASE_URL"], "postgresql://shell/db")
-                self.assertEqual(os.environ["SESSION_TTL_SECONDS"], "3600")
-
-    def test_serve_argv_has_english_and_small_model_overrides(self) -> None:
-        options = ui_server.parse_args(
-            ["--small-models", "--s2s-port", "9001", "--", "--log_level", "warning"]
-        )
-        with patch.object(ui_server, "_on_apple_silicon", return_value=True):
-            argv = ui_server.build_serve_argv(options, system="Darwin", machine="arm64")
-        self.assertEqual(argv[0], "serve")
-        self.assertIn("--port", argv)
-        self.assertEqual(argv[argv.index("--port") + 1], "9001")
-        self.assertIn("--qwen3_tts_language", argv)
-        self.assertEqual(argv[argv.index("--qwen3_tts_language") + 1], "en")
-        self.assertIn("--stt", argv)
-        self.assertEqual(argv[argv.index("--stt") + 1], "mlx-audio-whisper")
-        self.assertIn("mlx-community/Qwen2.5-1.5B-Instruct-4bit", argv)
-        self.assertEqual(argv[-2:], ["--log_level", "warning"])
-
-    def test_port_open_detects_free_port(self) -> None:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            free_port = sock.getsockname()[1]
-        self.assertFalse(ui_server.port_open("127.0.0.1", free_port))
-
-    def test_latency_logs_include_turn_stage_and_measurements(self) -> None:
-        session = ui_server.BrowserSession(browser=None, options=None)
-        session.latency_turn = 3
-        output = StringIO()
-        with tempfile.TemporaryDirectory() as directory:
-            log_path = Path(directory) / "latency.log"
-            with patch.object(ui_server, "LATENCY_LOG", log_path), redirect_stdout(output):
-                session.log_latency("first_audio", cycle=1, after_response_start=123.4)
-            expected = "[LATENCY] turn=3 first_audio cycle=1 after_response_start=123ms"
-            self.assertIn(expected, output.getvalue())
-            self.assertIn(expected, log_path.read_text(encoding="utf-8"))
+    def test_options_are_for_local_ui_only(self) -> None:
+        options = ui_server.parse_args(["--ui-port", "8001", "--no-open"])
+        self.assertEqual(options.ui_port, 8001)
+        self.assertTrue(options.no_open)
+        with self.assertRaises(SystemExit):
+            ui_server.parse_args(["--small-models"])
 
     def test_static_page_has_required_controls(self) -> None:
         self.assertTrue(ui_server.UI_INDEX.exists())
@@ -96,7 +51,6 @@ class WebUILauncherTests(unittest.TestCase):
         self.assertIn("/ws", paths)
         self.assertIn("/healthz", paths)
         self.assertIn("/menu/sync", paths)
-        self.assertIn("/memoryz", paths)
 
     def test_prompt_requires_mock_order_tool(self) -> None:
         self.assertIn("MUST call", ui_server.DEFAULT_INSTRUCTIONS)

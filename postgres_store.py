@@ -7,10 +7,17 @@ from decimal import Decimal
 from typing import Any
 
 _pool: Any = None
+_disabled_for_process = False
 
 
 def configured() -> bool:
-    return bool(os.environ.get("DATABASE_URL"))
+    return bool(os.environ.get("DATABASE_URL")) and not _disabled_for_process
+
+
+def mark_unavailable() -> None:
+    """Use the in-memory demo store after an unsuccessful startup connection."""
+    global _disabled_for_process
+    _disabled_for_process = True
 
 
 def is_open() -> bool:
@@ -20,7 +27,7 @@ def is_open() -> bool:
 async def open_store(seed_menu: list[dict[str, Any]]) -> bool:
     """Open the pool, create tables, and seed the menu on first run."""
 
-    global _pool
+    global _pool, _disabled_for_process
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         return False
@@ -187,6 +194,7 @@ async def open_store(seed_menu: list[dict[str, Any]]) -> bool:
         await _pool.close()
         _pool = None
         raise
+    _disabled_for_process = False
     return True
 
 

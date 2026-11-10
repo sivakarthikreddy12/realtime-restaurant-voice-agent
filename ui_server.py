@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Small local web UI for the realtime restaurant voice assistant.
-
-The UI is a single HTML page served by FastAPI. A WebSocket bridge connects the
-browser to the ``speech-to-speech serve`` Realtime backend, executes the local
-restaurant tools, and streams transcripts plus PCM16 TTS audio back to the page.
-
-Run:
-    source .venv/bin/activate
-    python ui_server.py
-
-Then open http://127.0.0.1:8000.
-"""
+"""Local restaurant voice UI backed by Groq Cloud speech APIs."""
 
 from __future__ import annotations
 
@@ -19,588 +8,141 @@ import asyncio
 import base64
 import json
 import os
-import socket
-import subprocess
 import sys
-import time
 import uuid
 import webbrowser
-from contextlib import asynccontextmanager, suppress
-from typing import Any, cast
+from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
-import certifi
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
-from openai import AsyncOpenAI
-
-from config.model_config import get_model_profile
-from config.platform_config import resolve_platform
-from memory_monitor import log_memory_snapshot, memory_response
+import groq_voice
 
 import order_tools
-from main import (
-    DEFAULT_INSTRUCTIONS,
-    NLTK_DATA_DIR,
-    PROJECT_ROOT,
-    _on_apple_silicon,
-    configure_ssl_trust,
-    ensure_nltk_data,
-    validate_tool_module,
-)
-from speech_to_speech.api.openai_realtime.audio_client import (
-    RealtimeAudioClientConfig,
-    build_session_update,
-    load_realtime_tool_module,
-)
+from main import DEFAULT_INSTRUCTIONS, PROJECT_ROOT
 
 UI_INDEX = PROJECT_ROOT / "ui" / "index.html"
-LATENCY_LOG = PROJECT_ROOT / "latency.log"
 DEFAULT_UI_PORT = 8000
-DEFAULT_S2S_PORT = 8765
-SILENCE_SECONDS = 0.75
-PCM_CHUNK_BYTES = 2048
-
-
-def load_local_env(path: Path | None = None) -> None:
-    """Load simple KEY=VALUE settings from the project .env without overriding the shell."""
-    env_path = path or PROJECT_ROOT / ".env"
-    try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, separator, value = line.partition("=")
-        if not separator or not key.strip():
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        os.environ.setdefault(key.strip(), value)
-
-
-def port_open(host: str, port: int, timeout: float = 0.25) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def build_browser_session_update(
-    config: RealtimeAudioClientConfig,
-) -> dict[str, Any]:
-    session_update = build_session_update(config)
-
-    turn_detection = session_update["session"]["audio"]["input"]["turn_detection"]
-    turn_detection.update(
-        {
-            "create_response": False,
-            "silence_duration_ms": 700,
-        }
-    )
-
-    return session_update
-
-
-def build_response_create(user_text: str) -> dict[str, Any]:
-    """Require a function call before answering menu/cart/order requests."""
-
-    response: dict[str, Any] = {}
-    if order_tools.message_requires_tool(user_text):
-        response["tool_choice"] = "required"
-    return {"type": "response.create", "response": response}
-
-
-async def wait_for_port(host: str, port: int, process: subprocess.Popen[Any] | None, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process is not None and process.poll() is not None:
-            raise RuntimeError(f"Voice backend exited with code {process.returncode}.")
-        try:
-            _reader, writer = await asyncio.open_connection(host, port)
-            writer.close()
-            await writer.wait_closed()
-            return
-        except OSError:
-            await asyncio.sleep(0.5)
-    raise RuntimeError(f"Voice backend did not start on {host}:{port} within {timeout:.0f}s.")
-
-
-def build_serve_argv(
-    options: argparse.Namespace,
-    *,
-    system: str | None = None,
-    machine: str | None = None,
-) -> list[str]:
-    argv = ["serve"]
-    profile_name = resolve_platform(options.profile, system=system, machine=machine)
-    if options.mac_optimal and profile_name == "macos-apple-silicon" and _on_apple_silicon():
-        argv.append("--mac-optimal-settings")
-    if profile_name == "windows-cpu":
-        argv.extend(get_model_profile(profile_name).cli_args())
-    elif profile_name == "macos-apple-silicon" and options.small_models:
-        argv.extend(
-            [
-                "--stt",
-                "mlx-audio-whisper",
-                "--mlx_audio_whisper_model_name",
-                "mlx-community/whisper-base-mlx",
-                "--model_name",
-                "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
-                "--qwen3_tts_model_name",
-                "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit",
-            ]
-        )
-    elif options.small_models:
-        raise ValueError("--small-models is available for the Windows CPU or Apple Silicon profiles.")
-    argv.extend(
-        [
-            "--port",
-            str(options.s2s_port),
-            "--qwen3_tts_language",
-            "en",
-            "--init_chat_prompt",
-            options.prompt,
-        ]
-    )
-    if options.small_models:
-        argv.extend(
-            [
-                "--stt",
-                "mlx-audio-whisper",
-                "--mlx_audio_whisper_model_name",
-                "mlx-community/whisper-small-mlx",
-                "--language",
-                "en",
-                "--model_name",
-                "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
-                "--qwen3_tts_model_name",
-                "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit",
-            ]
-        )
-    argv.extend(options.extra_args)
-    return argv
-
-
-def start_voice_backend(options: argparse.Namespace) -> subprocess.Popen[Any] | None:
-    if options.no_start:
-        return None
-    if port_open("127.0.0.1", options.s2s_port):
-        raise RuntimeError(
-            f"Port {options.s2s_port} is already in use. Stop the other server or pass "
-            f"--s2s-port with a free port."
-        )
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    env["NLTK_DATA"] = str(NLTK_DATA_DIR)
-    ca_bundle = certifi.where()
-    env["SSL_CERT_FILE"] = ca_bundle
-    env["REQUESTS_CA_BUNDLE"] = ca_bundle
-    env["CURL_CA_BUNDLE"] = ca_bundle
-    profile_name = resolve_platform(options.profile)
-    env["RESTAURANT_VOICE_PROFILE"] = profile_name
-    command = [sys.executable, "-m", "backend_launcher", *build_serve_argv(options)]
-    print("Starting voice backend:")
-    print("  " + " ".join(command), flush=True)
-    return subprocess.Popen(command, cwd=str(PROJECT_ROOT), env=env)
-
-
-def stop_voice_backend(process: subprocess.Popen[Any] | None) -> None:
-    if process is None or process.poll() is not None:
-        return
-    print("Stopping voice backend...", flush=True)
-    process.terminate()
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+UI_INDEX = PROJECT_ROOT / "ui" / "index.html"
+DEFAULT_UI_PORT = 8000
 
 
 class BrowserSession:
-    """One browser connection bridged to one Realtime backend session."""
-
     def __init__(self, browser: WebSocket, options: argparse.Namespace) -> None:
-        self.browser = browser
-        self.options = options
-        self.session_id = str(uuid.uuid4())
-        self.store_id = "sanpeggios-demo"
-        self.current_user_text: str | None = None
-        self.pending_calls: list[dict[str, Any]] = []
-        self.latency_turn = 0
-        self.speech_started_at: float | None = None
-        self.speech_ended_at: float | None = None
-        self.response_started_at: float | None = None
-        self.response_cycle = 0
-        self.first_text_logged = False
-        self.first_audio_logged = False
+        self.browser, self.options = browser, options
+        self.session_id = str(uuid.uuid4()); self.store_id = "sanpeggios-demo"
+        self.pcm = bytearray(); self.history: list[dict[str, str]] = []
 
-    def log_latency(self, stage: str, **measurements: float | int | str) -> None:
-        details = " ".join(
-            f"{name}={value:.0f}ms"
-            if isinstance(value, (int, float))
-            and ("duration" in name or name.startswith("after_") or name.endswith("_pause"))
-            else f"{name}={value}"
-            for name, value in measurements.items()
-        )
-        line = (
-            f"[{time.strftime('%H:%M:%S')}] [LATENCY] turn={self.latency_turn} "
-            f"{stage}{' ' + details if details else ''}"
-        )
-        print(line, flush=True)
-        with LATENCY_LOG.open("a", encoding="utf-8") as log_file:
-            log_file.write(line + "\n")
-
-    @staticmethod
-    def elapsed_ms(started_at: float, ended_at: float | None = None) -> float:
-        return ((ended_at if ended_at is not None else time.perf_counter()) - started_at) * 1000
-
-    async def send(self, payload: dict[str, Any]) -> None:
-        await self.browser.send_json(payload)
+    async def send(self, payload: dict[str, Any]) -> None: await self.browser.send_json(payload)
 
     async def run(self) -> None:
-        requested_session_id = self.browser.query_params.get("session_id")
-        if requested_session_id:
-            try:
-                self.session_id = str(uuid.UUID(requested_session_id))
-            except ValueError:
-                pass
+        requested = self.browser.query_params.get("session_id")
+        if requested:
+            try: self.session_id = str(uuid.UUID(requested))
+            except ValueError: pass
         self.store_id = self.browser.query_params.get("store_id", "sanpeggios-demo")[:80]
         await order_tools.ensure_persisted_session(self.session_id, self.store_id)
-        with order_tools.use_session(self.session_id, self.store_id), order_tools.use_latency_callback(self.log_latency):
-            await self.run_session()
-
-    async def run_session(self) -> None:
-        tools, executor, create_response = load_realtime_tool_module("order_tools")
-        config = RealtimeAudioClientConfig(
-            tools=tools,
-            tool_executor=executor,
-            tool_response_create=create_response,
-            send_rate=16000,
-            recv_rate=16000,
-            instructions=self.options.prompt,
-        )
-        client = AsyncOpenAI(
-            base_url=f"http://127.0.0.1:{self.options.s2s_port}/v1",
-            websocket_base_url=f"ws://127.0.0.1:{self.options.s2s_port}/v1",
-            api_key="local",
-        )
-        try:
-            async with client.realtime.connect(model="local") as conn:
-                session_update = build_browser_session_update(config)
-                await conn.send(cast(Any, session_update))
-                while True:
-                    event = await asyncio.wait_for(conn.recv(), timeout=30)
-                    if event.type == "session.updated":
-                        break
-                await order_tools.require_fresh_cart_review(self.session_id)
-                cart, subtotal = await order_tools.get_session_cart_snapshot(self.session_id)
-                await self.send({"type": "cart_state", "items": cart, "subtotal": subtotal})
-                await self.send({"type": "ready"})
-                welcome = await order_tools.session_welcome(self.session_id, self.store_id)
-                if welcome:
-                    # The local speech-to-speech model needs a user message in
-                    # its context, even when it is generating the opening line.
-                    # This internal cue is not shown as a customer transcript.
-                    await conn.send({
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type": "message",
-                            "role": "user",
-                            "content": [{
-                                "type": "input_text",
-                                "text": f"Start the conversation by saying this welcome message exactly: {welcome}",
-                            }],
-                        },
-                    })
-                    await conn.send({
-                        "type": "response.create",
-                        "response": {"instructions": f"Say this welcome message exactly, then wait for the customer: {welcome}", "tool_choice": "none"},
-                    })
-
-                browser_task = asyncio.create_task(self.pump_browser(conn))
-                realtime_task = asyncio.create_task(self.pump_realtime(conn))
-                done, pending = await asyncio.wait(
-                    {browser_task, realtime_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                for task in done:
-                    if not task.cancelled() and task.exception() is not None:
-                        raise task.exception()  # type: ignore[misc]
-        except WebSocketDisconnect:
-            pass
-        except Exception as exc:
+        with order_tools.use_session(self.session_id, self.store_id):
+            cart, subtotal = await order_tools.get_session_cart_snapshot(self.session_id)
+            await self.send({"type":"cart_state", "items":cart, "subtotal":subtotal}); await self.send({"type":"ready"})
+            welcome = await order_tools.session_welcome(self.session_id, self.store_id)
+            if welcome: await self.reply(welcome)
             try:
-                await self.send({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
-            except Exception:
-                pass
-        finally:
-            await client.close()
+                while True:
+                    msg = await self.browser.receive_json(); kind = msg.get("type")
+                    if kind == "audio":
+                        audio = msg.get("audio")
+                        if isinstance(audio, str): self.pcm.extend(base64.b64decode(audio))
+                    elif kind == "audio_end":
+                        audio = bytes(self.pcm); self.pcm.clear()
+                        if audio: await self.handle_audio(audio)
+                    elif kind == "text":
+                        text = str(msg.get("text", "")).strip()
+                        if text: await self.handle_text(text)
+                    elif kind == "mock_order": await self.mock_order()
+            except WebSocketDisconnect: pass
+            except Exception as exc:
+                try: await self.send({"type":"error", "message":str(exc)})
+                except Exception: pass
 
-    async def pump_browser(self, conn: Any) -> None:
-        while True:
-            message = await self.browser.receive_json()
-            kind = message.get("type")
-            if kind == "text":
-                text = str(message.get("text", "")).strip()
-                if not text:
-                    continue
-                self.current_user_text = text
-                await order_tools.invalidate_review_for_message(text)
-                await conn.send(
-                    {
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type": "message",
-                            "role": "user",
-                            "content": [{"type": "input_text", "text": text}],
-                        },
-                    }
-                )
-                await conn.send(build_response_create(text))
-                await self.send({"type": "thinking"})
-            elif kind == "audio":
-                audio = message.get("audio")
-                if isinstance(audio, str) and audio:
-                    await conn.send({"type": "input_audio_buffer.append", "audio": audio})
-            elif kind == "audio_end":
-                silence = b"\x00\x00" * int(16000 * SILENCE_SECONDS)
-                for offset in range(0, len(silence), PCM_CHUNK_BYTES):
-                    await conn.send(
-                        {
-                            "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(
-                                silence[offset : offset + PCM_CHUNK_BYTES]
-                            ).decode("ascii"),
-                        }
-                    )
-                await self.send({"type": "thinking"})
-            elif kind == "mock_order":
-                cart_result = await order_tools.execute_tool("get_cart", {})
-                await self.send({"type": "tool_result", "name": "get_cart", "result": cart_result})
-                if not cart_result.get("items"):
-                    await self.send({"type": "notice", "text": "The cart is empty, so no mock order was created."})
-                    continue
-                receipt = await order_tools.execute_tool(
-                    "create_mock_order", {"customer_confirmation": "yes, place the order"}
-                )
-                await self.send(
-                    {"type": "tool_result", "name": "create_mock_order", "result": receipt}
-                )
-                if receipt.get("status") == "MOCK_ORDER_CREATED":
-                    await self.send(
-                        {
-                            "type": "notice",
-                            "text": f"Mock receipt {receipt['order_id']} created. No real order was placed.",
-                        }
-                    )
-                else:
-                    await self.send(
-                        {
-                            "type": "notice",
-                            "text": receipt.get("error", "The mock order could not be created."),
-                        }
-                    )
-            elif kind == "ping":
-                await self.send({"type": "pong"})
+    async def handle_audio(self, pcm: bytes) -> None:
+        await self.send({"type":"thinking"})
+        try:
+            text = await groq_voice.transcribe(pcm)
+            if not text:
+                await self.send({"type":"notice", "text":"I didn't catch that. Please try again."}); await self.send({"type":"response_done"}); return
+            await self.send({"type":"user_transcript", "text":text}); await self.handle_text(text)
+        except Exception as exc: await self.send({"type":"error", "message":str(exc)})
 
-    async def pump_realtime(self, conn: Any) -> None:
-        while True:
-            event = await conn.recv()
-            kind = event.type
+    async def handle_text(self, text: str) -> None:
+        await order_tools.invalidate_review_for_message(text); await self.send({"type":"thinking"})
+        try:
+            menu_result = await order_tools.execute_tool("show_menu", {})
+            if menu_result.get("error"):
+                await self.reply(str(menu_result["error"])); return
+            menu = menu_result.get("menu", menu_result)
+            parsed = await groq_voice.parse_order(text, self.history, menu)
+            reply, tool = str(parsed.get("reply", "")), parsed.get("tool")
+            if tool:
+                args = parsed.get("arguments", {})
+                if not isinstance(args, dict): args = {}
+                await self.send({"type":"tool_start", "name":tool, "arguments":args})
+                with order_tools.use_user_message(text): result = await order_tools.execute_tool(tool, args)
+                await self.send({"type":"tool_result", "name":tool, "result":result})
+                if result.get("error"): reply = str(result["error"])
+                elif tool == "show_menu": pass
+                else:
+                    cart, subtotal = await order_tools.get_session_cart_snapshot(self.session_id)
+                    await self.send({"type":"cart_state", "items":cart, "subtotal":subtotal})
+                    if tool == "get_cart": reply = ("Your cart: " + ", ".join(f"{x['quantity']} {x['name']}" for x in cart) + f". Subtotal ${subtotal:.2f}.") if cart else "Your cart is empty."
+                    elif not result.get("error"):
+                        summary = ", ".join(f"{item['quantity']} {item['name']}" for item in cart)
+                        reply = f"Your cart now has {summary}. Subtotal ${subtotal:.2f}."
+            if not reply: reply = "What would you like to order?"
+            self.history.extend([{"role":"user","content":text},{"role":"assistant","content":reply}]); await self.reply(reply)
+        except Exception as exc: await self.send({"type":"error", "message":str(exc)})
 
-            if kind == "conversation.item.input_audio_transcription.completed":
-                text = getattr(event, "transcript", "") or ""
-                if self.speech_ended_at is not None:
-                    self.log_latency(
-                        "transcription_complete",
-                        after_speech_end=self.elapsed_ms(self.speech_ended_at),
-                    )
-                if text:
-                    self.current_user_text = text
-                    await order_tools.invalidate_review_for_message(text)
-                    await self.send({"type": "user_transcript", "text": text})
-                    await conn.send(build_response_create(text))
-                else:
-                    self.log_latency("empty_transcription_ignored")
-                    await self.send({"type": "notice", "text": "I didn't catch that. Please try saying it again."})
-                    await self.send({"type": "response_done", "status": "no_transcript"})
-            elif kind in {"response.output_audio_transcript.delta", "response.output_text.delta"}:
-                if self.response_started_at is not None and not self.first_text_logged:
-                    self.first_text_logged = True
-                    self.log_latency(
-                        "first_text",
-                        after_response_start=self.elapsed_ms(self.response_started_at),
-                    )
-                await self.send({"type": "assistant_delta", "text": event.delta})
-            elif kind == "response.output_audio_transcript.done":
-                text = getattr(event, "transcript", "") or ""
-                if text:
-                    await self.send({"type": "assistant_done", "text": text})
-            elif kind == "response.output_audio.delta":
-                if self.response_started_at is not None and not self.first_audio_logged:
-                    self.first_audio_logged = True
-                    self.log_latency(
-                        "first_audio",
-                        after_response_start=self.elapsed_ms(self.response_started_at),
-                        after_speech_end=self.elapsed_ms(self.speech_ended_at)
-                        if self.speech_ended_at is not None
-                        else "n/a",
-                    )
-                await self.send({"type": "audio", "audio": event.delta})
-            elif kind == "response.output_audio.done":
-                await self.send({"type": "audio_done"})
-            elif kind == "response.created":
-                self.response_cycle += 1
-                self.response_started_at = time.perf_counter()
-                self.first_text_logged = False
-                self.first_audio_logged = False
-                self.log_latency(
-                    "response_started",
-                    cycle=self.response_cycle,
-                    after_speech_end=self.elapsed_ms(self.speech_ended_at)
-                    if self.speech_ended_at is not None
-                    else "n/a",
-                )
-                await self.send({"type": "response_started"})
-            elif kind == "response.function_call_arguments.done":
-                try:
-                    arguments = json.loads(event.arguments or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-                call = {
-                    "name": event.name,
-                    "arguments": arguments,
-                    "call_id": event.call_id,
-                    "user_message": self.current_user_text,
-                }
-                self.pending_calls.append(call)
-                await self.send(
-                    {
-                        "type": "tool_start",
-                        "name": event.name,
-                        "arguments": arguments,
-                    }
-                )
-            elif kind == "response.done":
-                status = getattr(event.response, "status", "completed")
-                if self.response_started_at is not None:
-                    self.log_latency(
-                        "response_complete",
-                        cycle=self.response_cycle,
-                        duration=self.elapsed_ms(self.response_started_at),
-                        status=status,
-                    )
-                if self.pending_calls:
-                    for call in self.pending_calls:
-                        tool_started_at = time.perf_counter()
-                        try:
-                            with order_tools.use_user_message(call["user_message"]):
-                                result = await order_tools.execute_tool(call["name"], call["arguments"])
-                        except Exception as exc:
-                            result = {"error": f"{type(exc).__name__}: {exc}"}
-                        finally:
-                            self.log_latency(
-                                "tool_complete",
-                                name=call["name"],
-                                duration=self.elapsed_ms(tool_started_at),
-                            )
-                        await conn.send(
-                            {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "function_call_output",
-                                    "call_id": call["call_id"],
-                                    "output": json.dumps(result),
-                                },
-                            }
-                        )
-                        await self.send(
-                            {
-                                "type": "tool_result",
-                                "name": call["name"],
-                                "result": result,
-                            }
-                        )
-                    self.pending_calls.clear()
-                    await conn.send({"type": "response.create"})
-                else:
-                    await self.send({"type": "response_done", "status": status})
-            elif kind == "input_audio_buffer.speech_started":
-                self.latency_turn += 1
-                self.current_user_text = ""
-                self.speech_started_at = time.perf_counter()
-                self.speech_ended_at = None
-                self.response_cycle = 0
-                self.log_latency("speech_started")
-                await self.send({"type": "listening"})
-            elif kind == "input_audio_buffer.speech_stopped":
-                self.speech_ended_at = time.perf_counter()
-                self.log_latency(
-                    "speech_end_detected",
-                    speech_duration=self.elapsed_ms(self.speech_started_at, self.speech_ended_at)
-                    if self.speech_started_at is not None
-                    else "n/a",
-                    vad_pause=700,
-                )
-                await self.send({"type": "thinking"})
-            elif kind == "error":
-                error = getattr(event, "error", None)
-                message = getattr(error, "message", None) or str(error)
-                await self.send({"type": "error", "message": message})
+    async def reply(self, text: str) -> None:
+        await self.send({"type":"response_started"}); await self.send({"type":"assistant_delta", "text":text}); await self.send({"type":"assistant_done", "text":text})
+        try: await self.send({"type":"audio", "audio":base64.b64encode(await groq_voice.synthesize(text)).decode("ascii"), "format":"wav"})
+        except Exception as exc: await self.send({"type":"notice", "text":str(exc)})
+        await self.send({"type":"audio_done"}); await self.send({"type":"response_done"})
+
+    async def mock_order(self) -> None:
+        result = await order_tools.execute_tool("get_cart", {}); await self.send({"type":"tool_result", "name":"get_cart", "result":result})
+        if not result.get("items"):
+            await self.send({"type":"notice", "text":"The cart is empty, so no mock order was created."}); return
+        receipt = await order_tools.execute_tool("create_mock_order", {"customer_confirmation":"yes, place the order"}); await self.send({"type":"tool_result", "name":"create_mock_order", "result":receipt})
+        if receipt.get("status") == "MOCK_ORDER_CREATED": await self.send({"type":"notice", "text":f"Mock receipt {receipt['order_id']} created. No real order was placed."})
+        else: await self.send({"type":"notice", "text":receipt.get("error", "The mock order could not be created.")})
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     options: argparse.Namespace = app.state.options
-    configure_ssl_trust()
-    ensure_nltk_data()
-    validate_tool_module("order_tools")
-    load_local_env()
     import postgres_store
 
-    await postgres_store.open_store(order_tools.MENU)
+    app.state.database_warning = None
+    try:
+        await postgres_store.open_store(order_tools.MENU)
+    except Exception as exc:
+        postgres_store.mark_unavailable()
+        app.state.database_warning = (
+            "PostgreSQL is unavailable; using the built-in sample menu and in-memory carts. "
+            "Start PostgreSQL and restart the app to enable persistence."
+        )
+        print(f"{app.state.database_warning} ({type(exc).__name__})", flush=True)
     if postgres_store.is_open():
         import menu_sync
         result = await menu_sync.sync_store()
         if result.get("status") == "success":
             order_tools._STORE_MENU_CACHE.pop("sanpeggios-demo", None)
 
-    process = None
-    monitor_task: asyncio.Task[None] | None = None
     try:
-        log_memory_snapshot("ui_ready", os.getpid())
-        process = start_voice_backend(options)
-        app.state.s2s_process = process
-        monitor_task = asyncio.create_task(monitor_memory())
-        if options.no_start:
-            await wait_for_port("127.0.0.1", options.s2s_port, None, 1.0)
-        else:
-            await wait_for_port("127.0.0.1", options.s2s_port, process, options.startup_timeout)
-        log_memory_snapshot("backend_ready", os.getpid())
         yield
     finally:
-        if monitor_task is not None:
-            monitor_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await monitor_task
-        stop_voice_backend(process)
         await postgres_store.close_store()
-
-
-async def monitor_memory(interval_seconds: float = 15.0) -> None:
-    while True:
-        await asyncio.sleep(interval_seconds)
-        log_memory_snapshot("runtime", os.getpid())
 
 
 app = FastAPI(title="Sanpeggio's Pizza Voice Ordering Demo", lifespan=lifespan)
@@ -614,11 +156,14 @@ async def index() -> FileResponse:
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
     options = app.state.options
+    import postgres_store
     return JSONResponse(
         {
             "status": "ok",
-            "backend": f"ws://127.0.0.1:{options.s2s_port}/v1/realtime",
+            "backend": "Groq Cloud API",
             "ui": f"http://{options.host}:{options.ui_port}",
+            "database": "connected" if postgres_store.is_open() else "memory_fallback",
+            "database_warning": getattr(app.state, "database_warning", None),
         }
     )
 
@@ -629,9 +174,6 @@ async def sync_menu(store_id: str = "sanpeggios-demo") -> JSONResponse:
     result = await menu_sync.sync_store(store_id)
     order_tools._STORE_MENU_CACHE.pop(store_id, None)
     return JSONResponse(result, status_code=200 if result.get("status") == "success" else 502)
-@app.get("/memoryz")
-async def memoryz() -> JSONResponse:
-    return JSONResponse(memory_response(os.getpid()))
 
 
 @app.websocket("/ws")
@@ -647,34 +189,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="UI bind address (local only by default).")
     parser.add_argument("--ui-port", type=int, default=DEFAULT_UI_PORT, help="Browser UI port.")
-    parser.add_argument("--s2s-port", type=int, default=DEFAULT_S2S_PORT, help="Internal Realtime server port.")
     parser.add_argument("--prompt", default=DEFAULT_INSTRUCTIONS, help="Assistant system prompt.")
-    parser.add_argument(
-        "--small-models",
-        action="store_true",
-        help="Use the platform's compact profile (Windows CPU or the existing Apple Silicon model set).",
-    )
-    parser.add_argument(
-        "--profile",
-        choices=("auto", "windows-cpu", "macos-apple-silicon", "framework-defaults"),
-        default="auto",
-        help="Runtime/model profile. Auto selects Windows CPU or Apple Silicon settings by platform.",
-    )
-    parser.add_argument("--no-start", action="store_true", help="Connect to an already-running Realtime server.")
     parser.add_argument("--no-open", action="store_true", help="Do not open the browser automatically.")
-    parser.add_argument("--startup-timeout", type=float, default=900.0, help="Seconds to wait for model startup.")
-    parser.add_argument("--no-mac-optimal", action="store_true", help="Do not add --mac-optimal-settings.")
-    parser.add_argument(
-        "extra_args",
-        nargs=argparse.REMAINDER,
-        help="Extra `speech-to-speech serve` arguments; put them after `--`.",
-    )
     options = parser.parse_args(argv)
-    extra = list(options.extra_args)
-    if extra and extra[0] == "--":
-        extra = extra[1:]
-    options.extra_args = extra
-    options.mac_optimal = not options.no_mac_optimal
     return options
 
 

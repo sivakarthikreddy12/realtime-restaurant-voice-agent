@@ -506,21 +506,17 @@
     function playAudio(base64) {
       if (!base64 || state.responseInterrupted) return;
       const ctx = ensurePlaybackContext();
-      const bytes = base64ToBytes(base64);
-      const count = Math.floor(bytes.length / 2);
-      if (!count) return;
-      const samples = new Int16Array(bytes.buffer, bytes.byteOffset, count);
-      const buffer = ctx.createBuffer(1, count, 16000);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < count; i += 1) data[i] = samples[i] / 32768;
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      state.audioSources.add(source);
-      source.onended = () => state.audioSources.delete(source);
-      const start = Math.max(ctx.currentTime + 0.03, state.nextPlayTime);
-      source.start(start);
-      state.nextPlayTime = start + buffer.duration;
+      ctx.decodeAudioData(base64ToBytes(base64).buffer.slice(0)).then((buffer) => {
+        if (state.responseInterrupted) return;
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        state.audioSources.add(source);
+        source.onended = () => state.audioSources.delete(source);
+        const start = Math.max(ctx.currentTime + 0.03, state.nextPlayTime);
+        source.start(start);
+        state.nextPlayTime = start + buffer.duration;
+      }).catch((error) => addSystem(`Could not play the returned WAV audio: ${error.message || error}`));
     }
 
     function stopPlayback() {
